@@ -1,65 +1,76 @@
 # KeyTap Overlay
 
-A small Windows desktop app that shows a transparent keyboard and lights keys while they are pressed. Layouts and appearance settings are editable; the app uses only Python's standard library at runtime.
+A small Windows app that shows a keyboard overlay and highlights keys as you press them. Choose a laptop or desktop layout, switch compact mode on or off, and customize the colors, transparency, and font.
 
-## Run from source
+## Run the app
 
-1. Install Python 3 for Windows with Tkinter enabled.
-2. Keep the project folders together as downloaded.
-3. Double-click `main.pyw`, or open a terminal here and run `py main.pyw`.
-4. Click the small gear button on the overlay, or right-click it, to select a PC or Laptop layout, turn compact mode on or off, open Settings, or quit.
+When a Windows release is available, download `KeyTap-Overlay.exe` from the Releases page and double-click it. No Python installation is needed.
 
-The first launch copies editable layouts and settings into `%APPDATA%\KeyTap-Overlay`. This keeps personal changes separate from the bundled defaults and works when the app is packaged as an executable. Existing Keyboard Overlay preferences are carried over.
+To run from source, install Python 3 for Windows with Tkinter, then double-click `main.pyw` or run:
 
-## Settings
-
-Open **Settings…** from the gear menu. The window has a live key preview and continuous sliders; changes appear on the overlay as you adjust them and are only saved when you choose **Save settings**. Choose **Cancel** to restore the saved appearance.
-
-You can adjust overall transparency, key label and outline colors, optional key fill, pressed-key highlight color, and any font family installed on the computer.
-
-## Layouts and laptop keys
-
-The bundled presets include US ANSI/ISO, French AZERTY, German QWERTZ, and laptop versions. Laptop profiles show an Fn marker. Many laptops do not send Fn as a separate Windows key event, so the marker may not light. Its position is controlled by `fn_after` in the layout definition.
-
-The **US QWERTY (Laptop, Win+P lights F1)** profile maps that shortcut to F1. Other key combinations can be added in the layout's `chords` section. Windows scan codes identify physical positions; active input-language labels can be used for character keys.
-
-Users can edit `%APPDATA%\KeyTap-Overlay\keyboard_layouts.json` from the gear menu. `rows` describes the main keys, `right` describes right-side clusters, and each key is `[label, scan_code, width]`. Copy a similar preset, change its name and rows, save, and restart.
-
-## Project structure
-
-```text
-main.pyw                         Application entry point
-keyboard_overlay/app.py          Overlay UI and event display
-keyboard_overlay/keyboard_hook.py Windows keyboard event listener
-keyboard_overlay/layouts.py      Layout loading and user data
-keyboard_overlay/settings.py     Settings window and persistence
-data/keyboard_layouts.json       Built-in keyboard presets
-.github/workflows/release.yml    Tagged GitHub release build
-build_exe.bat                    Local Windows build
+```bat
+py main.pyw
 ```
 
-## Build the Windows executable
+Click the gear button on the overlay to open the menu. From there, choose a keyboard layout, toggle compact mode, open Settings, or quit the app. You can also right-click the overlay to open the menu.
 
-On Windows, double-click `build_exe.bat`. It installs the pinned packaging tool into the project-local `.build-tools` folder, builds a single executable, and creates a zip containing the executable, README, and license:
+## Customize the appearance
+
+Open **Settings** from the gear menu. Adjust the transparency, key text and outline colors, optional key fill, pressed-key color, and font. Use the preview to see changes as you make them. Choose **Save settings** to keep them or **Cancel** to restore the saved appearance.
+
+## Keyboard layouts
+
+KeyTap includes US ANSI and ISO, French AZERTY, and German QWERTZ layouts, with laptop profiles for supported layouts. Laptop profiles include an Fn marker, though many laptops do not report Fn as a separate key to Windows.
+
+The US QWERTY laptop profile maps `Win+P` to F1 for laptops where F1 is not reported separately. Other key combinations can be added to the `chords` section of a layout.
+
+To edit layouts, open `%APPDATA%\KeyTap-Overlay\keyboard_layouts.json` from the gear menu. Layouts use `rows` for the main keys and `right` for right-side key groups. Each key entry contains a label, scan code, and width. Save your changes and restart KeyTap Overlay to load them.
+
+## Build the Windows app
+
+On Windows, double-click `build_exe.bat`. It builds the executable and a zip containing the app, README, and license:
 
 ```text
 dist/KeyTap-Overlay.exe
 dist/KeyTap-Overlay-0.2.0-Windows.zip
 ```
 
-The one-file, windowed build lets users put `KeyTap-Overlay.exe` on their Desktop and double-click it without opening a console. The bundled layout data is included in the executable, while editable layouts and settings stay in AppData. See the [PyInstaller documentation](https://pyinstaller.org/en/stable/usage.html).
+The build uses PyInstaller. Layouts and settings are stored in `%APPDATA%\KeyTap-Overlay`, so they stay separate from the executable.
 
-## Publish releases and push updates
+## Project files
 
-The GitHub Actions workflow in `.github/workflows/release.yml` builds and publishes a release whenever a `v` version tag is pushed. The app is named **KeyTap Overlay**. Since other keyboard-related projects use “KeyTap,” `keytap-overlay` is the clearer repository name. To publish an update:
+```text
+main.pyw                         App entry point
+keyboard_overlay/app.py          Overlay window and menu
+keyboard_overlay/keyboard_hook.py Keyboard input listener
+keyboard_overlay/layouts.py       Layout loading and user data
+keyboard_overlay/settings.py      Settings window and storage
+data/keyboard_layouts.json        Built-in keyboard layouts
+.github/workflows/release.yml     GitHub release workflow
+build_exe.bat                     Windows build script
+```
 
-1. Update `VERSION`, for example to `0.2.1`.
-2. Commit and push the changes to GitHub.
-3. Create and push the matching tag: `git tag v0.2.1`, then `git push origin v0.2.1`.
-4. GitHub Actions builds the `.exe` and zip, then attaches both to the GitHub Release.
+## Releases and updates
 
-Users download each new release and replace the old executable. The app does not yet check for or install updates automatically. Releases are based on version tags and can include downloadable files; see [GitHub's release guide](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases) and [`gh release create`](https://cli.github.com/manual/gh_release_create).
+Pushing a version tag such as `v0.2.1` starts the GitHub Actions workflow. It builds the Windows executable and zip and attaches them to a GitHub release.
 
-## Notes
+To publish an update:
 
-The keyboard hook observes key-down and key-up events locally. It does not save or transmit typed text. Fn behavior and physical key geometry vary by model, so users can contribute custom layouts instead of requiring a device-model catalog.
+1. Change the version in `VERSION`.
+2. Commit and push your changes.
+3. Create and push a matching tag:
+
+   ```bat
+   git tag v0.2.1
+   git push origin v0.2.1
+   ```
+
+Users can download the new release and replace their existing executable. KeyTap Overlay does not currently install updates automatically.
+
+## Privacy
+
+KeyTap Overlay watches key-down and key-up events to highlight keys on screen. It does not save or send the text you type. Some laptops do not report the Fn key to Windows, and keyboard layouts can vary by model. You can edit a layout or contribute one for a different keyboard.
+
+## Contributing
+
+Custom layouts and improvements are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution instructions. KeyTap Overlay is licensed under the [MIT License](LICENSE).
