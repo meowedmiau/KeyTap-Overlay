@@ -51,7 +51,7 @@ The one-file, windowed build lets users put `KeyTap-Overlay.exe` on their Deskto
 
 ## Publish releases and push updates
 
-The GitHub Actions workflow in `.github/workflows/release.yml` builds and publishes a release whenever a `v` version tag is pushed. The app is named **KeyTap Overlay**. Since other keyboard-related projects use “KeyTap,” `keytap-overlay` is the clearer repository name. To publish updates after creating the public repository:
+The GitHub Actions workflow in `.github/workflows/release.yml` builds and publishes a release whenever a `v` version tag is pushed. The app is named **KeyTap Overlay**. Since other keyboard-related projects use “KeyTap,” `keytap-overlay` is the clearer repository name. To publish an update:
 
 1. Update `VERSION`, for example to `0.2.1`.
 2. Commit and push the changes to GitHub.
