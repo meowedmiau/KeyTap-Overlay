@@ -15,7 +15,7 @@ if not exist ".build-tools\PyInstaller\__main__.py" (
     if errorlevel 1 exit /b %errorlevel%
 )
 set "PYTHONPATH=%CD%\.build-tools"
-py -m PyInstaller --noconfirm --clean --windowed --onefile --name KeyTap-Overlay --icon "assets\keytap.ico" --add-data "data;data" main.pyw
+py -m PyInstaller --noconfirm --clean --windowed --onefile --name KeyTap-Overlay --icon "assets\keytap.ico" --add-data "data;data" --add-data "VERSION;." main.pyw
 if errorlevel 1 exit /b %errorlevel%
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path 'dist\KeyTap-Overlay.exe','README.md','LICENSE' -DestinationPath 'dist\KeyTap-Overlay-%VERSION%-Windows.zip' -Force"
 if errorlevel 1 exit /b %errorlevel%

@@ -4,11 +4,14 @@ import ctypes.wintypes
 import os
 import queue
 import re
+import threading
 import tkinter as tk
+import webbrowser
 from tkinter import messagebox
 from .keyboard_hook import KeyboardHook
 from .layouts import load_layouts, user_layout_file
 from .settings import SettingsDialog, load_settings
+from .updates import check_latest_release, current_version, download_and_launch_update
 
 TRANSPARENT = "#010203"
 VK_F1 = 0x70
@@ -47,6 +50,8 @@ class KeyboardOverlayApp:
         self.held_ids = set()
         self.active_chords = set()
         self.events = queue.SimpleQueue()
+        self.update_results = queue.SimpleQueue()
+        self.update_checking = False
         self.user32 = ctypes.windll.user32
         self.user32.GetKeyNameTextW.argtypes = (ctypes.wintypes.LONG, ctypes.wintypes.LPWSTR, ctypes.c_int)
         self.user32.GetKeyNameTextW.restype = ctypes.c_int
@@ -63,6 +68,7 @@ class KeyboardOverlayApp:
             self.root.destroy()
             return
         self.root.after(15, self.process_events)
+        self.root.after(2500, lambda: self.check_for_updates(manual=False))
         self.root.mainloop()
 
     def build(self):
@@ -186,6 +192,7 @@ class KeyboardOverlayApp:
                          command=self.toggle_auto_labels)
         menu.add_command(label="Settings…", command=self.open_settings)
         menu.add_command(label="Open layout definitions…", command=lambda: os.startfile(str(user_layout_file())))
+        menu.add_command(label="Check for updates…", command=lambda: self.check_for_updates(manual=True))
         menu.add_separator()
         menu.add_command(label="Quit", command=self.close)
         try:
@@ -246,7 +253,79 @@ class KeyboardOverlayApp:
                     if target in self.active_chords and not set(combo.split("+")).issubset(self.held_ids):
                         self.active_chords.discard(target)
                         self.flash(target, False)
+        self.process_update_results()
         self.root.after(15, self.process_events)
+
+    def check_for_updates(self, manual=True):
+        if self.update_checking:
+            return
+        self.update_checking = True
+
+        def check():
+            try:
+                result = check_latest_release()
+                self.update_results.put(("checked", manual, result))
+            except Exception as exc:
+                self.update_results.put(("check_error", manual, str(exc)))
+
+        threading.Thread(target=check, daemon=True).start()
+
+    def process_update_results(self):
+        while True:
+            try:
+                kind, manual, result = self.update_results.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "checked":
+                self.update_checking = False
+                if result is None:
+                    if manual:
+                        messagebox.showinfo("KeyTap Overlay", "You’re using the latest version.", parent=self.root)
+                    continue
+                answer = messagebox.askyesno(
+                    "KeyTap Overlay update available",
+                    f"Version {result['version']} is available. You’re using version {current_version()}.\n\n"
+                    "Download and install it now? KeyTap will close and reopen after the update.",
+                    parent=self.root,
+                )
+                if answer:
+                    self.install_update(result)
+            elif kind == "check_error":
+                self.update_checking = False
+                if manual:
+                    messagebox.showwarning("KeyTap Overlay", f"Couldn’t check for updates.\n\n{result}", parent=self.root)
+            elif kind == "install_started":
+                self.update_checking = False
+                outcome, release_url = result
+                if outcome == "source":
+                    webbrowser.open(release_url)
+                    messagebox.showinfo(
+                        "KeyTap Overlay update available",
+                        "This copy was started from source code. The Releases page is opening so you can download the updated app.",
+                        parent=self.root,
+                    )
+                else:
+                    messagebox.showinfo(
+                        "Updating KeyTap Overlay",
+                        "The update is ready. KeyTap Overlay will close, replace its app file, and reopen.",
+                        parent=self.root,
+                    )
+                    self.close()
+            elif kind == "install_error":
+                self.update_checking = False
+                messagebox.showerror("KeyTap Overlay update failed", str(result), parent=self.root)
+
+    def install_update(self, release):
+        self.update_checking = True
+
+        def install():
+            try:
+                outcome = download_and_launch_update(release)
+                self.update_results.put(("install_started", False, (outcome, release["release_url"])))
+            except Exception as exc:
+                self.update_results.put(("install_error", False, str(exc)))
+
+        threading.Thread(target=install, daemon=True).start()
 
     def close(self):
         if hasattr(self, "hook"):

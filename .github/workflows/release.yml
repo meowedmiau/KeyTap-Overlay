@@ -34,7 +34,7 @@ jobs:
       - name: Build executable and download archive
         shell: pwsh
         run: |
-          pyinstaller --noconfirm --clean --windowed --onefile --name KeyTap-Overlay --icon "assets/keytap.ico" --add-data "data;data" main.pyw
+          pyinstaller --noconfirm --clean --windowed --onefile --name KeyTap-Overlay --icon "assets/keytap.ico" --add-data "data;data" --add-data "VERSION;." main.pyw
           $version = (Get-Content VERSION -Raw).Trim()
           Compress-Archive -Path @("dist\KeyTap-Overlay.exe", "README.md", "LICENSE") -DestinationPath "dist\KeyTap-Overlay-$version-Windows.zip" -Force
 
