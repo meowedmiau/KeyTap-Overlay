@@ -1,4 +1,5 @@
 """Appearance settings, live preview, and persistent user preferences."""
+
 import json
 import os
 from pathlib import Path
@@ -6,9 +7,11 @@ import shutil
 import tkinter as tk
 from tkinter import colorchooser, filedialog, font as tkfont, messagebox, ttk
 from uuid import uuid4
+
 from .background_editor import BackgroundCropDialog
 
 from PIL import Image
+
 
 DEFAULTS = {
     "opacity": 100,
@@ -20,6 +23,7 @@ DEFAULTS = {
     "font_size": 9,
     "lock_key": "Shift",
     "background_image": "",
+    "keyboard_scale": 100,
 }
 
 BG = "#f3f6fa"
@@ -64,7 +68,11 @@ def settings_path():
 def load_settings():
     try:
         loaded = json.loads(settings_path().read_text(encoding="utf-8"))
-        return {**DEFAULTS, **loaded}
+        settings = {**DEFAULTS, **loaded}
+        settings["keyboard_scale"] = min(
+            150, max(50, int(settings.get("keyboard_scale", 100)))
+        )
+        return settings
     except (OSError, ValueError, TypeError):
         return dict(DEFAULTS)
 
@@ -106,7 +114,7 @@ class SettingsDialog:
     def __init__(self, parent, settings, on_preview, background_aspect=2.5):
         self.parent = parent
         self.original = dict(settings)
-        self.draft = dict(settings)
+        self.draft = {**DEFAULTS, **settings}
         self.on_preview = on_preview
         self.background_aspect = background_aspect
 
@@ -114,7 +122,7 @@ class SettingsDialog:
         self.window.title("KeyTap Overlay · Settings")
         self.window.transient(parent)
         self.window.attributes("-topmost", True)
-        self.window.resizable(False, False)
+        self.window.resizable(True, True)
         self.window.configure(bg=BG)
         self.window.protocol("WM_DELETE_WINDOW", self.cancel)
 
@@ -149,8 +157,41 @@ class SettingsDialog:
             background=[("active", "#1572bd")],
         )
 
-        shell = tk.Frame(self.window, bg=BG, padx=22, pady=18)
-        shell.pack(fill="both", expand=True)
+        # Scrollable settings content, with action buttons fixed below it.
+        outer = tk.Frame(self.window, bg=BG)
+        outer.pack(fill="both", expand=True)
+
+        content = tk.Frame(outer, bg=BG)
+        canvas = tk.Canvas(content, bg=BG, bd=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(content, orient="vertical", command=canvas.yview)
+        shell = tk.Frame(canvas, bg=BG, padx=18, pady=12)
+
+        shell_window = canvas.create_window((0, 0), window=shell, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        def update_scroll_region(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfigure(shell_window, width=canvas.winfo_width())
+
+        shell.bind("<Configure>", update_scroll_region)
+        canvas.bind("<Configure>", update_scroll_region)
+
+        content.pack(fill="both", expand=True, padx=8, pady=(8, 0))
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self._scroll_canvas = canvas
+        self._scroll_shell = shell
+
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-event.delta / 120), "units")
+
+        canvas.bind_all("<MouseWheel>", on_mousewheel)
+        self.window.bind(
+            "<Destroy>",
+            lambda _event: canvas.unbind_all("<MouseWheel>"),
+            add="+",
+        )
 
         tk.Label(
             shell,
@@ -165,15 +206,15 @@ class SettingsDialog:
             bg=BG,
             fg=MUTED,
             font=("Segoe UI", 10),
-        ).pack(anchor="w", pady=(3, 16))
+        ).pack(anchor="w", pady=(3, 12))
 
         self.preview_card = tk.Frame(
             shell,
             bg="#eaf2f9",
             padx=13,
-            pady=11,
+            pady=9,
         )
-        self.preview_card.pack(fill="x", pady=(0, 13))
+        self.preview_card.pack(fill="x", pady=(0, 10))
 
         tk.Label(
             self.preview_card,
@@ -184,7 +225,7 @@ class SettingsDialog:
         ).pack(anchor="w")
 
         self.sample = tk.Frame(self.preview_card, bg="#eaf2f9")
-        self.sample.pack(anchor="center", pady=(7, 0))
+        self.sample.pack(anchor="center", pady=(5, 0))
 
         self.preview_keys = []
         for title in ("Q", "W", "E", "R", "T", "Y"):
@@ -192,7 +233,7 @@ class SettingsDialog:
                 self.sample,
                 text=title,
                 width=4,
-                pady=5,
+                pady=4,
                 padx=2,
                 font=(
                     self.draft["font_family"],
@@ -212,11 +253,41 @@ class SettingsDialog:
 
         self.card(
             shell,
+            "KEYBOARD SIZE",
+            "Scale the complete keyboard evenly, from 50% to 150%.",
+        )
+        scale_row = tk.Frame(self.last_card, bg=CARD)
+        scale_row.pack(fill="x", padx=15, pady=(0, 9))
+
+        self.keyboard_scale_var = tk.DoubleVar(
+            value=self.draft["keyboard_scale"]
+        )
+        ttk.Scale(
+            scale_row,
+            from_=50,
+            to=150,
+            variable=self.keyboard_scale_var,
+            command=self.update_keyboard_scale,
+            style="Overlay.Horizontal.TScale",
+        ).pack(side="left", fill="x", expand=True)
+
+        self.keyboard_scale_label = tk.Label(
+            scale_row,
+            text=f"{self.draft['keyboard_scale']}%",
+            width=6,
+            bg=CARD,
+            fg=TEXT,
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.keyboard_scale_label.pack(side="right", padx=(10, 0))
+
+        self.card(
+            shell,
             "TRANSPARENCY",
             "Set the overlay opacity from invisible to fully visible.",
         )
         opacity_row = tk.Frame(self.last_card, bg=CARD)
-        opacity_row.pack(fill="x", padx=15, pady=(0, 12))
+        opacity_row.pack(fill="x", padx=15, pady=(0, 9))
 
         self.opacity_var = tk.DoubleVar(value=self.draft["opacity"])
         ttk.Scale(
@@ -244,10 +315,10 @@ class SettingsDialog:
             "Choose colors for labels, outlines, and presses.",
         )
         color_grid = tk.Frame(self.last_card, bg=CARD)
-        color_grid.pack(fill="x", padx=14, pady=(0, 13))
+        color_grid.pack(fill="x", padx=14, pady=(0, 10))
 
         for index, (title, setting, description) in enumerate(self.COLORS):
-            cell = tk.Frame(color_grid, bg=CARD, padx=3, pady=4)
+            cell = tk.Frame(color_grid, bg=CARD, padx=3, pady=3)
             cell.grid(
                 row=index // 2,
                 column=index % 2,
@@ -265,7 +336,7 @@ class SettingsDialog:
             ).pack(anchor="w")
 
             line = tk.Frame(cell, bg=CARD)
-            line.pack(fill="x", pady=(5, 0))
+            line.pack(fill="x", pady=(4, 0))
 
             swatch = tk.Label(line, width=3, height=1, relief="solid", bd=1)
             swatch.pack(side="left")
@@ -278,7 +349,7 @@ class SettingsDialog:
                 fg=TEXT,
                 activebackground="#dfeaf3",
                 padx=9,
-                pady=4,
+                pady=3,
                 command=lambda key=setting: self.choose_color(key),
             ).pack(side="left", padx=(7, 0))
 
@@ -300,7 +371,7 @@ class SettingsDialog:
                 wraplength=200,
                 justify="left",
                 font=("Segoe UI", 8),
-            ).pack(anchor="w", pady=(3, 0))
+            ).pack(anchor="w", pady=(2, 0))
 
             setattr(self, f"swatch_{setting}", swatch)
 
@@ -310,12 +381,9 @@ class SettingsDialog:
             "Pick any font installed on this Windows computer.",
         )
         type_row = tk.Frame(self.last_card, bg=CARD)
-        type_row.pack(fill="x", padx=15, pady=(0, 12))
+        type_row.pack(fill="x", padx=15, pady=(0, 9))
 
-        families = sorted(
-            set(tkfont.families(self.window)),
-            key=str.casefold,
-        )
+        families = sorted(set(tkfont.families(self.window)), key=str.casefold)
         if not families:
             families = ["Segoe UI", "Arial", "Calibri", "Consolas", "Tahoma"]
 
@@ -357,7 +425,7 @@ class SettingsDialog:
             "Choose an image to fit behind the keyboard.",
         )
         background_row = tk.Frame(self.last_card, bg=CARD)
-        background_row.pack(fill="x", padx=15, pady=(0, 12))
+        background_row.pack(fill="x", padx=15, pady=(0, 9))
 
         background_path = self.draft.get("background_image", "")
         background_name = Path(background_path).name if background_path else "None"
@@ -378,7 +446,7 @@ class SettingsDialog:
             fg=TEXT,
             activebackground="#dfeaf3",
             padx=9,
-            pady=4,
+            pady=3,
             command=self.choose_background,
         ).pack(side="left", padx=(7, 0))
 
@@ -397,11 +465,9 @@ class SettingsDialog:
             "Choose the key that toggles click-through.",
         )
         lock_row = tk.Frame(self.last_card, bg=CARD)
-        lock_row.pack(fill="x", padx=15, pady=(0, 12))
+        lock_row.pack(fill="x", padx=15, pady=(0, 9))
 
-        self.lock_var = tk.StringVar(
-            value=self.draft.get("lock_key", "Shift")
-        )
+        self.lock_var = tk.StringVar(value=self.draft.get("lock_key", "Shift"))
         self.lock_box = ttk.Combobox(
             lock_row,
             textvariable=self.lock_var,
@@ -412,8 +478,9 @@ class SettingsDialog:
         )
         self.lock_box.pack(side="left", fill="x", expand=True)
 
-        buttons = tk.Frame(shell, bg=BG)
-        buttons.pack(fill="x", pady=(13, 0))
+        # Buttons are outside the scroll region, so they remain on screen.
+        buttons = tk.Frame(outer, bg=BG, padx=18, pady=10)
+        buttons.pack(fill="x", side="bottom")
 
         ttk.Button(
             buttons,
@@ -430,9 +497,18 @@ class SettingsDialog:
 
         self.update_sample()
         self.window.update_idletasks()
-        self.window.geometry(
-            f"{self.window.winfo_reqwidth()}x{self.window.winfo_reqheight()}"
+
+        screen_height = self.window.winfo_screenheight()
+        window_height = min(
+            self.window.winfo_reqheight(),
+            max(400, screen_height - 100),
         )
+        window_width = min(
+            max(500, self.window.winfo_reqwidth() + 20),
+            self.window.winfo_screenwidth() - 40,
+        )
+        self.window.geometry(f"{window_width}x{window_height}")
+        self.window.minsize(460, min(480, window_height))
         self.window.grab_set()
 
     def card(self, parent, heading, detail):
@@ -442,7 +518,7 @@ class SettingsDialog:
             highlightbackground=LINE,
             highlightthickness=1,
         )
-        card.pack(fill="x", pady=(0, 10))
+        card.pack(fill="x", pady=(0, 7))
 
         tk.Label(
             card,
@@ -450,7 +526,7 @@ class SettingsDialog:
             bg=CARD,
             fg=TEXT,
             font=("Segoe UI", 9, "bold"),
-        ).pack(anchor="w", padx=15, pady=(11, 2))
+        ).pack(anchor="w", padx=15, pady=(8, 2))
 
         tk.Label(
             card,
@@ -458,7 +534,7 @@ class SettingsDialog:
             bg=CARD,
             fg=MUTED,
             font=("Segoe UI", 8),
-        ).pack(anchor="w", padx=15, pady=(0, 10))
+        ).pack(anchor="w", padx=15, pady=(0, 7))
 
         self.last_card = card
 
@@ -491,6 +567,13 @@ class SettingsDialog:
     def preview(self):
         self.update_sample()
         self.on_preview(dict(self.draft))
+
+    def update_keyboard_scale(self, value):
+        self.draft["keyboard_scale"] = min(150, max(50, round(float(value))))
+        self.keyboard_scale_label.configure(
+            text=f"{self.draft['keyboard_scale']}%"
+        )
+        self.preview()
 
     def update_opacity(self, value):
         self.draft["opacity"] = round(float(value))
@@ -556,6 +639,7 @@ class SettingsDialog:
         self.draft["font_family"] = self.font_var.get()
         self.draft["font_size"] = round(self.size_var.get())
         self.draft["opacity"] = round(self.opacity_var.get())
+        self.draft["keyboard_scale"] = round(self.keyboard_scale_var.get())
         self.draft["lock_key"] = self.lock_var.get()
         save_settings(self.draft)
         self.on_preview(dict(self.draft))

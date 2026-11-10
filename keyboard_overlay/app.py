@@ -37,11 +37,11 @@ LOCK_KEY_VKS = {
     **{f"F{i}": {0x70 + i - 1} for i in range(1, 13)},
 }
 
-HEADER_HEIGHT = 28
-KEY_HEIGHT = 27
-ROW_GAP = 4
-KEY_GAP = 4
-SIDE_GAP = 8
+BASE_HEADER_HEIGHT = 28
+BASE_KEY_HEIGHT = 27
+BASE_ROW_GAP = 4
+BASE_KEY_GAP = 4
+BASE_SIDE_GAP = 8
 
 NAV_ROWS = [
     [["Ins", "E052", 1], ["Home", "E047", 1], ["PgUp", "E049", 1]],
@@ -134,11 +134,22 @@ class KeyboardOverlayApp:
         self.root.after(2500, lambda: self.check_for_updates(manual=False))
         self.root.mainloop()
 
+    @property
+    def scale(self):
+        try:
+            return min(1.5, max(0.5, float(self.settings.get("keyboard_scale", 100)) / 100))
+        except (TypeError, ValueError):
+            return 1.0
+
+    def scaled(self, value, minimum=1):
+        return max(minimum, round(value * self.scale))
+
     def key_width(self, width):
-        return max(3, int(width * 4)) * 8 + 4
+        base = max(3, int(width * 4)) * 8 + 4
+        return self.scaled(base)
 
     def cell_width(self, width):
-        return self.key_width(width) + KEY_GAP
+        return self.key_width(width) + self.scaled(BASE_KEY_GAP)
 
     def row_width(self, row):
         return sum(self.cell_width(item[2]) for item in row)
@@ -154,6 +165,12 @@ class KeyboardOverlayApp:
         self.keys = {}
         self.function_keys = {}
         self.background_photo = None
+
+        self.header_height = self.scaled(BASE_HEADER_HEIGHT, minimum=12)
+        self.key_height = self.scaled(BASE_KEY_HEIGHT, minimum=12)
+        self.row_gap = self.scaled(BASE_ROW_GAP)
+        self.key_gap = self.scaled(BASE_KEY_GAP)
+        self.side_gap = self.scaled(BASE_SIDE_GAP)
 
         layout = self.layouts[self.layout_name]
         rows = layout["rows"]
@@ -174,7 +191,7 @@ class KeyboardOverlayApp:
         if not self.compact:
             clusters = layout.get("right", [{"rows": NAV_ROWS}, {"rows": NUMPAD_ROWS}])
 
-        x_right = 5 + main_width + SIDE_GAP
+        x_right = self.scaled(5) + main_width + self.side_gap
         right_width = 0
         right_rows = 0
 
@@ -184,16 +201,25 @@ class KeyboardOverlayApp:
                 (self.row_width(row) for row in cluster_rows),
                 default=0,
             )
-            right_width += cluster_width + SIDE_GAP
+            right_width += cluster_width + self.side_gap
             right_rows = max(right_rows, len(cluster_rows))
 
         if clusters:
-            right_width -= SIDE_GAP
+            right_width -= self.side_gap
 
-        canvas_width = max(1, 10 + main_width + (SIDE_GAP + right_width if clusters else 0))
+        canvas_width = max(
+            1,
+            self.scaled(10)
+            + main_width
+            + (self.side_gap + right_width if clusters else 0),
+        )
         main_row_count = len(display_rows)
         row_count = max(main_row_count, right_rows)
-        canvas_height = HEADER_HEIGHT + 5 + row_count * (KEY_HEIGHT + ROW_GAP)
+        canvas_height = (
+            self.header_height
+            + self.scaled(5)
+            + row_count * (self.key_height + self.row_gap)
+        )
 
         self.canvas = tk.Canvas(
             self.root,
@@ -211,12 +237,16 @@ class KeyboardOverlayApp:
             self.set_background_image(image_path, canvas_width, canvas_height)
 
         self.canvas.create_text(
-            8,
-            HEADER_HEIGHT // 2,
+            self.scaled(8),
+            self.header_height // 2,
             text=self.layout_name,
             anchor="w",
             fill=self.settings["text_color"],
-            font=(self.settings["font_family"], self.settings["font_size"], "bold"),
+            font=(
+                self.settings["font_family"],
+                self.scaled(self.settings["font_size"], minimum=5),
+                "bold",
+            ),
         )
 
         lock_text = (
@@ -225,31 +255,31 @@ class KeyboardOverlayApp:
             else "drag · ⚙ for options"
         )
         self.status_item = self.canvas.create_text(
-            canvas_width - 31,
-            HEADER_HEIGHT // 2,
+            canvas_width - self.scaled(31),
+            self.header_height // 2,
             text=lock_text,
             anchor="e",
             fill=self.settings["text_color"],
             font=(
                 self.settings["font_family"],
-                max(7, self.settings["font_size"] - 2),
+                self.scaled(max(7, self.settings["font_size"] - 2), minimum=5),
             ),
         )
 
         self.gear_item = self.canvas.create_text(
-            canvas_width - 8,
-            HEADER_HEIGHT // 2,
+            canvas_width - self.scaled(8),
+            self.header_height // 2,
             text="⚙",
             anchor="e",
             fill=self.settings["text_color"],
-            font=("Segoe UI Symbol", 11, "bold"),
+            font=("Segoe UI Symbol", self.scaled(11, minimum=6), "bold"),
         )
 
-        body_y = HEADER_HEIGHT + 3
+        body_y = self.header_height + self.scaled(3)
 
         for row_index, row in enumerate(display_rows):
-            x = 5
-            y = body_y + row_index * (KEY_HEIGHT + ROW_GAP)
+            x = self.scaled(5)
+            y = body_y + row_index * (self.key_height + self.row_gap)
 
             for label, scan, width in row:
                 self.add_key(x, y, label, scan, width)
@@ -261,7 +291,7 @@ class KeyboardOverlayApp:
             for cluster in clusters:
                 for row_index, row in enumerate(cluster["rows"]):
                     x = cluster_x
-                    y = body_y + row_index * (KEY_HEIGHT + ROW_GAP)
+                    y = body_y + row_index * (self.key_height + self.row_gap)
 
                     for label, scan, width in row:
                         if scan or label:
@@ -272,7 +302,7 @@ class KeyboardOverlayApp:
                     (self.row_width(row) for row in cluster["rows"]),
                     default=0,
                 )
-                cluster_x += cluster_width + SIDE_GAP
+                cluster_x += cluster_width + self.side_gap
 
         self.canvas.bind("<ButtonPress-1>", self.start_drag)
         self.canvas.bind("<B1-Motion>", self.drag)
@@ -317,17 +347,21 @@ class KeyboardOverlayApp:
             x,
             y,
             x + key_width,
-            y + KEY_HEIGHT,
+            y + self.key_height,
             fill=fill,
             outline=outline,
-            width=1,
+            width=self.scaled(1),
         )
         text = self.canvas.create_text(
             x + key_width // 2,
-            y + KEY_HEIGHT // 2,
+            y + self.key_height // 2,
             text=shown,
             fill=self.settings["text_color"],
-            font=(self.settings["font_family"], self.settings["font_size"], "bold"),
+            font=(
+                self.settings["font_family"],
+                self.scaled(self.settings["font_size"], minimum=5),
+                "bold",
+            ),
         )
 
         if ident:
@@ -390,7 +424,7 @@ class KeyboardOverlayApp:
         if self.locked:
             return
 
-        if event.y <= HEADER_HEIGHT and event.x >= self.canvas.winfo_width() - 28:
+        if event.y <= self.header_height and event.x >= self.canvas.winfo_width() - self.scaled(28):
             self.open_options()
             return
 
@@ -408,13 +442,11 @@ class KeyboardOverlayApp:
     def menu(self, event):
         if self.locked:
             return
-
         self.show_options_menu(event.x_root, event.y_root)
 
     def open_options(self):
         if self.locked:
             return
-
         self.show_options_menu(
             self.root.winfo_pointerx(),
             self.root.winfo_pointery(),
@@ -428,14 +460,12 @@ class KeyboardOverlayApp:
 
         for group in ("PC", "Laptop"):
             submenu = tk.Menu(menu, tearoff=False)
-
             for name, layout in self.layouts.items():
                 if layout.get("group", "PC") == group:
                     submenu.add_command(
                         label=("✓ " if name == self.layout_name else "") + name,
                         command=lambda n=name: self.select_layout(n),
                     )
-
             if submenu.index("end") is not None:
                 menu.add_cascade(label=group, menu=submenu)
 
@@ -507,10 +537,7 @@ class KeyboardOverlayApp:
                 if pressed
                 else (self.settings.get("key_fill") or ""),
             )
-            self.canvas.itemconfigure(
-                text,
-                fill=self.settings["text_color"],
-            )
+            self.canvas.itemconfigure(text, fill=self.settings["text_color"])
 
     def process_events(self):
         while True:
@@ -542,7 +569,6 @@ class KeyboardOverlayApp:
 
                 combo = "+".join(sorted(self.held_ids))
                 target = chords.get(combo)
-
                 if target and target not in self.active_chords:
                     self.active_chords.add(target)
                     self.flash(target, True)
@@ -603,13 +629,11 @@ class KeyboardOverlayApp:
                     "after the update.",
                     parent=self.root,
                 )
-
                 if answer:
                     self.install_update(result)
 
             elif kind == "check_error":
                 self.update_checking = False
-
                 if manual:
                     messagebox.showwarning(
                         "KeyTap Overlay",
@@ -620,7 +644,6 @@ class KeyboardOverlayApp:
             elif kind == "install_started":
                 self.update_checking = False
                 outcome, release_url = result
-
                 if outcome == "source":
                     webbrowser.open(release_url)
                     messagebox.showinfo(
@@ -664,3 +687,11 @@ class KeyboardOverlayApp:
         if hasattr(self, "hook"):
             self.hook.close()
         self.root.destroy()
+
+
+def main():
+    KeyboardOverlayApp()
+
+
+if __name__ == "__main__":
+    main()
