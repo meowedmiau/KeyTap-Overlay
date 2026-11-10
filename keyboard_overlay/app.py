@@ -483,8 +483,17 @@ class KeyboardOverlayApp:
         self.build()
 
     def open_settings(self):
-        if not self.locked:
-            SettingsDialog(self.root, self.settings, self.preview_settings)
+        if self.locked:
+            return
+
+        width = max(1, self.canvas.winfo_width())
+        height = max(1, self.canvas.winfo_height())
+        SettingsDialog(
+            self.root,
+            self.settings,
+            self.preview_settings,
+            background_aspect=width / height,
+        )
 
     def preview_settings(self, values):
         self.settings = dict(values)

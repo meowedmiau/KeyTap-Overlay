@@ -6,6 +6,7 @@ import shutil
 import tkinter as tk
 from tkinter import colorchooser, filedialog, font as tkfont, messagebox, ttk
 from uuid import uuid4
+from .background_editor import BackgroundCropDialog
 
 from PIL import Image
 
@@ -102,11 +103,12 @@ class SettingsDialog:
         ("Pressed key", "pressed_color", "The color used while a key is held down."),
     ]
 
-    def __init__(self, parent, settings, on_preview):
+    def __init__(self, parent, settings, on_preview, background_aspect=2.5):
         self.parent = parent
         self.original = dict(settings)
         self.draft = dict(settings)
         self.on_preview = on_preview
+        self.background_aspect = background_aspect
 
         self.window = tk.Toplevel(parent)
         self.window.title("KeyTap Overlay · Settings")
@@ -523,21 +525,26 @@ class SettingsDialog:
             return
 
         try:
-            with Image.open(selected) as image:
-                image.verify()
-
-            self.draft["background_image"] = copy_background_image(selected)
-            self.background_label.configure(
-                text=Path(selected).name,
-                fg=TEXT,
+            BackgroundCropDialog(
+                self.window,
+                selected,
+                self.background_aspect,
+                self.set_background_crop,
             )
-            self.preview()
         except (OSError, ValueError) as exc:
             messagebox.showerror(
                 "KeyTap Overlay",
-                f"Could not load that image:\n{exc}",
+                f"Could not open that image:\n{exc}",
                 parent=self.window,
             )
+
+def set_background_crop(self, path):
+    self.draft["background_image"] = path
+    self.background_label.configure(
+        text=Path(path).name,
+        fg=TEXT,
+    )
+    self.preview()
 
     def remove_background(self):
         self.draft["background_image"] = ""
