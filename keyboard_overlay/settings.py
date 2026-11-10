@@ -2,8 +2,12 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import tkinter as tk
-from tkinter import colorchooser, font as tkfont, ttk
+from tkinter import colorchooser, filedialog, font as tkfont, messagebox, ttk
+from uuid import uuid4
+
+from PIL import Image
 
 DEFAULTS = {
     "opacity": 100,
@@ -14,6 +18,7 @@ DEFAULTS = {
     "font_family": "Segoe UI",
     "font_size": 9,
     "lock_key": "Shift",
+    "background_image": "",
 }
 
 BG = "#f3f6fa"
@@ -32,6 +37,11 @@ LOCK_KEY_CHOICES = (
     "Pause",
     *(f"F{i}" for i in range(1, 13)),
 )
+
+IMAGE_FILETYPES = [
+    ("Images", "*.png *.jpg *.jpeg *.bmp *.gif *.webp"),
+    ("All files", "*.*"),
+]
 
 
 def settings_path():
@@ -71,6 +81,17 @@ def readable_on(color):
         return TEXT if sum(rgb) > 390 else "#ffffff"
     except (ValueError, TypeError):
         return TEXT
+
+
+def copy_background_image(source_path):
+    source = Path(source_path)
+    folder = settings_path().parent / "backgrounds"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    suffix = source.suffix.lower()
+    target = folder / f"keyboard-background-{uuid4().hex}{suffix}"
+    shutil.copy2(source, target)
+    return str(target)
 
 
 class SettingsDialog:
@@ -138,7 +159,7 @@ class SettingsDialog:
         ).pack(anchor="w")
         tk.Label(
             shell,
-            text="Tune the keyboard overlay's colors and type.",
+            text="Tune the keyboard overlay's look and feel.",
             bg=BG,
             fg=MUTED,
             font=("Segoe UI", 10),
@@ -190,16 +211,15 @@ class SettingsDialog:
         self.card(
             shell,
             "TRANSPARENCY",
-            "Adjust how strongly the overlay sits over other windows.",
+            "Set the overlay opacity from invisible to fully visible.",
         )
-        self.opacity_value = tk.StringVar()
         opacity_row = tk.Frame(self.last_card, bg=CARD)
         opacity_row.pack(fill="x", padx=15, pady=(0, 12))
 
         self.opacity_var = tk.DoubleVar(value=self.draft["opacity"])
         ttk.Scale(
             opacity_row,
-            from_=35,
+            from_=0,
             to=100,
             variable=self.opacity_var,
             command=self.update_opacity,
@@ -331,6 +351,46 @@ class SettingsDialog:
 
         self.card(
             shell,
+            "BACKGROUND IMAGE",
+            "Choose an image to fit behind the keyboard.",
+        )
+        background_row = tk.Frame(self.last_card, bg=CARD)
+        background_row.pack(fill="x", padx=15, pady=(0, 12))
+
+        background_path = self.draft.get("background_image", "")
+        background_name = Path(background_path).name if background_path else "None"
+        self.background_label = tk.Label(
+            background_row,
+            text=background_name,
+            bg=CARD,
+            fg=MUTED,
+            anchor="w",
+        )
+        self.background_label.pack(side="left", fill="x", expand=True)
+
+        tk.Button(
+            background_row,
+            text="Choose image",
+            relief="flat",
+            bg="#edf3f8",
+            fg=TEXT,
+            activebackground="#dfeaf3",
+            padx=9,
+            pady=4,
+            command=self.choose_background,
+        ).pack(side="left", padx=(7, 0))
+
+        tk.Button(
+            background_row,
+            text="Remove",
+            relief="flat",
+            bg=CARD,
+            fg=MUTED,
+            command=self.remove_background,
+        ).pack(side="left", padx=(5, 0))
+
+        self.card(
+            shell,
             "OVERLAY LOCK",
             "Choose the key that toggles click-through.",
         )
@@ -452,6 +512,37 @@ class SettingsDialog:
         if chosen:
             self.draft[setting] = chosen
             self.preview()
+
+    def choose_background(self):
+        selected = filedialog.askopenfilename(
+            parent=self.window,
+            title="Choose keyboard background",
+            filetypes=IMAGE_FILETYPES,
+        )
+        if not selected:
+            return
+
+        try:
+            with Image.open(selected) as image:
+                image.verify()
+
+            self.draft["background_image"] = copy_background_image(selected)
+            self.background_label.configure(
+                text=Path(selected).name,
+                fg=TEXT,
+            )
+            self.preview()
+        except (OSError, ValueError) as exc:
+            messagebox.showerror(
+                "KeyTap Overlay",
+                f"Could not load that image:\n{exc}",
+                parent=self.window,
+            )
+
+    def remove_background(self):
+        self.draft["background_image"] = ""
+        self.background_label.configure(text="None", fg=MUTED)
+        self.preview()
 
     def clear_fill(self):
         self.draft["key_fill"] = None

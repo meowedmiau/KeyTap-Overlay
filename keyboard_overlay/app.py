@@ -9,6 +9,8 @@ import tkinter as tk
 import webbrowser
 from tkinter import messagebox
 
+from PIL import Image, ImageOps, ImageTk
+
 from .keyboard_hook import KeyboardHook
 from .layouts import load_layouts, user_layout_file
 from .settings import SettingsDialog, load_settings
@@ -77,6 +79,7 @@ class KeyboardOverlayApp:
         self.events = queue.SimpleQueue()
         self.update_results = queue.SimpleQueue()
         self.update_checking = False
+        self.background_photo = None
 
         self.user32 = ctypes.windll.user32
         self.user32.GetKeyNameTextW.argtypes = (
@@ -133,6 +136,7 @@ class KeyboardOverlayApp:
 
         self.keys = {}
         self.function_keys = {}
+        self.background_photo = None
 
         bar = tk.Frame(self.root, bg=TRANSPARENT)
         bar.pack(fill="x", padx=6, pady=(2, 1))
@@ -218,8 +222,44 @@ class KeyboardOverlayApp:
                                 bg=TRANSPARENT,
                             ).pack(side="left", padx=2)
 
-        self.root.attributes("-alpha", self.settings["opacity"] / 100)
         self.root.update_idletasks()
+        self.set_background_image()
+        self.root.attributes("-alpha", self.settings["opacity"] / 100)
+
+    def set_background_image(self):
+        path = self.settings.get("background_image")
+        if not path or not os.path.isfile(path):
+            return
+
+        width = max(1, self.root.winfo_reqwidth())
+        height = max(1, self.root.winfo_reqheight())
+
+        try:
+            with Image.open(path) as source:
+                image = ImageOps.fit(
+                    source.convert("RGBA"),
+                    (width, height),
+                    method=Image.Resampling.LANCZOS,
+                )
+
+            self.background_photo = ImageTk.PhotoImage(image, master=self.root)
+            self.background_widget = tk.Label(
+                self.root,
+                image=self.background_photo,
+                bg=TRANSPARENT,
+                bd=0,
+                padx=0,
+                pady=0,
+            )
+            self.background_widget.place(
+                x=0,
+                y=0,
+                width=width,
+                height=height,
+            )
+            self.background_widget.lower()
+        except (OSError, ValueError):
+            self.background_photo = None
 
     def add_key(self, parent, label, scan, width):
         if not scan:

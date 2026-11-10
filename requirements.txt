@@ -1,1 +1,2 @@
 # Runtime: Python standard library only. See requirements-build.txt for packaging.
+Pillow>=10.0
