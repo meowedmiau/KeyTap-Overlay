@@ -17,6 +17,7 @@ KeyTap checks for a newer release when it starts. If one is available, you can c
 - Choose a PC or laptop keyboard layout.
 - Turn compact mode on to hide the navigation keys and number pad, or off to show them.
 - Open **Settings** to change transparency, key colors, and font. Save your changes or cancel to discard them.
+- Press the selected lock key (Shift by default) to let mouse clicks pass through the overlay. Press it again to unlock the overlay.
 
 ## Keyboard layouts
 
