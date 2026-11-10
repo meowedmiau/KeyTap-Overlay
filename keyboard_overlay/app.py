@@ -17,6 +17,7 @@ from .settings import SettingsDialog, load_settings
 from .updates import check_latest_release, current_version, download_and_launch_update
 
 TRANSPARENT = "#010203"
+PANEL_COLOR = "#111722"
 VK_F1 = 0x70
 
 GWL_EXSTYLE = -20
@@ -35,6 +36,12 @@ LOCK_KEY_VKS = {
     "Pause": {0x13},
     **{f"F{i}": {0x70 + i - 1} for i in range(1, 13)},
 }
+
+HEADER_HEIGHT = 28
+KEY_HEIGHT = 27
+ROW_GAP = 4
+KEY_GAP = 4
+SIDE_GAP = 8
 
 NAV_ROWS = [
     [["Ins", "E052", 1], ["Home", "E047", 1], ["PgUp", "E049", 1]],
@@ -67,6 +74,7 @@ class KeyboardOverlayApp:
             (name for name, item in self.layouts.items() if item.get("group") == "PC"),
             next(iter(self.layouts)),
         )
+
         self.compact = False
         self.locked = False
         self.lock_key_scans = set()
@@ -113,9 +121,6 @@ class KeyboardOverlayApp:
         self.place_bottom_left()
         self.hwnd = ctypes.wintypes.HWND(self.root.winfo_id())
 
-        self.root.bind("<ButtonPress-1>", self.start_drag)
-        self.root.bind("<B1-Motion>", self.drag)
-        self.root.bind("<Button-3>", self.menu)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         try:
@@ -129,61 +134,32 @@ class KeyboardOverlayApp:
         self.root.after(2500, lambda: self.check_for_updates(manual=False))
         self.root.mainloop()
 
+    def key_width(self, width):
+        return max(3, int(width * 4)) * 8 + 4
+
+    def cell_width(self, width):
+        return self.key_width(width) + KEY_GAP
+
+    def row_width(self, row):
+        return sum(self.cell_width(item[2]) for item in row)
+
     def build(self):
         for child in self.root.winfo_children():
             if not isinstance(child, tk.Toplevel):
                 child.destroy()
 
+        old_x = self.root.winfo_x()
+        old_y = self.root.winfo_y()
+
         self.keys = {}
         self.function_keys = {}
         self.background_photo = None
-
-        bar = tk.Frame(self.root, bg=TRANSPARENT)
-        bar.pack(fill="x", padx=6, pady=(2, 1))
-
-        tk.Label(
-            bar,
-            text=self.layout_name,
-            fg=self.settings["text_color"],
-            bg=TRANSPARENT,
-            font=(self.settings["font_family"], self.settings["font_size"], "bold"),
-        ).pack(side="left")
-
-        self.status_label = tk.Label(
-            bar,
-            text="",
-            fg=self.settings["text_color"],
-            bg=TRANSPARENT,
-            font=(
-                self.settings["font_family"],
-                max(7, self.settings["font_size"] - 2),
-            ),
-        )
-        self.status_label.pack(side="right", padx=(0, 6))
-        self.update_lock_label()
-
-        options_button = tk.Label(
-            bar,
-            text="⚙",
-            bg=TRANSPARENT,
-            fg=self.settings["text_color"],
-            font=("Segoe UI Symbol", 11, "bold"),
-            cursor="hand2",
-            padx=4,
-        )
-        options_button.pack(side="right")
-        options_button.bind("<Button-1>", lambda _event: self.open_options())
-
-        body = tk.Frame(self.root, bg=TRANSPARENT)
-        body.pack(anchor="w")
-
-        main = tk.Frame(body, bg=TRANSPARENT)
-        main.pack(side="left", anchor="n")
 
         layout = self.layouts[self.layout_name]
         rows = layout["rows"]
         fn_after = layout.get("fn_after") if layout.get("group") == "Laptop" else None
 
+        display_rows = []
         for row_index, row in enumerate(rows):
             display_row = list(row)
             if fn_after is not None and row_index == len(rows) - 1:
@@ -191,49 +167,124 @@ class KeyboardOverlayApp:
                     min(fn_after + 1, len(display_row)),
                     ("Fn", "", 1),
                 )
+            display_rows.append(display_row)
 
-            line = tk.Frame(main, bg=TRANSPARENT)
-            line.pack(padx=5, pady=2, anchor="w")
-
-            for label, scan, width in display_row:
-                self.add_key(line, label, scan, width)
-
+        main_width = max((self.row_width(row) for row in display_rows), default=0)
+        clusters = []
         if not self.compact:
-            side = tk.Frame(body, bg=TRANSPARENT)
-            side.pack(side="left", anchor="n", padx=(8, 5), pady=2)
-
             clusters = layout.get("right", [{"rows": NAV_ROWS}, {"rows": NUMPAD_ROWS}])
-            for cluster in clusters:
-                column = tk.Frame(side, bg=TRANSPARENT)
-                column.pack(side="left", anchor="n", padx=(0, 8))
 
-                for row in cluster["rows"]:
-                    line = tk.Frame(column, bg=TRANSPARENT)
-                    line.pack(pady=2)
+        x_right = 5 + main_width + SIDE_GAP
+        right_width = 0
+        right_rows = 0
+
+        for cluster in clusters:
+            cluster_rows = cluster["rows"]
+            cluster_width = max(
+                (self.row_width(row) for row in cluster_rows),
+                default=0,
+            )
+            right_width += cluster_width + SIDE_GAP
+            right_rows = max(right_rows, len(cluster_rows))
+
+        if clusters:
+            right_width -= SIDE_GAP
+
+        canvas_width = max(1, 10 + main_width + (SIDE_GAP + right_width if clusters else 0))
+        main_row_count = len(display_rows)
+        row_count = max(main_row_count, right_rows)
+        canvas_height = HEADER_HEIGHT + 5 + row_count * (KEY_HEIGHT + ROW_GAP)
+
+        self.canvas = tk.Canvas(
+            self.root,
+            width=canvas_width,
+            height=canvas_height,
+            bg=TRANSPARENT,
+            bd=0,
+            highlightthickness=0,
+        )
+        self.canvas.pack(fill="both", expand=True)
+
+        image_path = self.settings.get("background_image", "")
+        if image_path and os.path.isfile(image_path):
+            self.canvas.configure(bg=PANEL_COLOR)
+            self.set_background_image(image_path, canvas_width, canvas_height)
+
+        self.canvas.create_text(
+            8,
+            HEADER_HEIGHT // 2,
+            text=self.layout_name,
+            anchor="w",
+            fill=self.settings["text_color"],
+            font=(self.settings["font_family"], self.settings["font_size"], "bold"),
+        )
+
+        lock_text = (
+            f"LOCKED · press {self.settings.get('lock_key', 'Shift')} to unlock"
+            if self.locked
+            else "drag · ⚙ for options"
+        )
+        self.status_item = self.canvas.create_text(
+            canvas_width - 31,
+            HEADER_HEIGHT // 2,
+            text=lock_text,
+            anchor="e",
+            fill=self.settings["text_color"],
+            font=(
+                self.settings["font_family"],
+                max(7, self.settings["font_size"] - 2),
+            ),
+        )
+
+        self.gear_item = self.canvas.create_text(
+            canvas_width - 8,
+            HEADER_HEIGHT // 2,
+            text="⚙",
+            anchor="e",
+            fill=self.settings["text_color"],
+            font=("Segoe UI Symbol", 11, "bold"),
+        )
+
+        body_y = HEADER_HEIGHT + 3
+
+        for row_index, row in enumerate(display_rows):
+            x = 5
+            y = body_y + row_index * (KEY_HEIGHT + ROW_GAP)
+
+            for label, scan, width in row:
+                self.add_key(x, y, label, scan, width)
+                x += self.cell_width(width)
+
+        if clusters:
+            cluster_x = x_right
+
+            for cluster in clusters:
+                for row_index, row in enumerate(cluster["rows"]):
+                    x = cluster_x
+                    y = body_y + row_index * (KEY_HEIGHT + ROW_GAP)
 
                     for label, scan, width in row:
-                        if scan:
-                            self.add_key(line, label, scan, width)
-                        else:
-                            tk.Label(
-                                line,
-                                text="",
-                                width=4,
-                                bg=TRANSPARENT,
-                            ).pack(side="left", padx=2)
+                        if scan or label:
+                            self.add_key(x, y, label, scan, width)
+                        x += self.cell_width(width)
 
-        self.root.update_idletasks()
-        self.set_background_image()
+                cluster_width = max(
+                    (self.row_width(row) for row in cluster["rows"]),
+                    default=0,
+                )
+                cluster_x += cluster_width + SIDE_GAP
+
+        self.canvas.bind("<ButtonPress-1>", self.start_drag)
+        self.canvas.bind("<B1-Motion>", self.drag)
+        self.canvas.bind("<Button-3>", self.menu)
+
         self.root.attributes("-alpha", self.settings["opacity"] / 100)
+        self.root.update_idletasks()
+        self.root.geometry(
+            f"{canvas_width}x{canvas_height}+{max(0, old_x)}+{max(0, old_y)}"
+        )
 
-    def set_background_image(self):
-        path = self.settings.get("background_image")
-        if not path or not os.path.isfile(path):
-            return
-
-        width = max(1, self.root.winfo_reqwidth())
-        height = max(1, self.root.winfo_reqheight())
-
+    def set_background_image(self, path, width, height):
         try:
             with Image.open(path) as source:
                 image = ImageOps.contain(
@@ -242,59 +293,49 @@ class KeyboardOverlayApp:
                     method=Image.Resampling.LANCZOS,
                 )
 
-            canvas = Image.new("RGBA", (width, height), (1, 2, 3, 0))
-            x = (width - image.width) // 2
-            y = (height - image.height) // 2
-            canvas.alpha_composite(image, (x, y))
-
-            self.background_photo = ImageTk.PhotoImage(canvas, master=self.root)
-            self.background_widget = tk.Label(
-                self.root,
+            self.background_photo = ImageTk.PhotoImage(image, master=self.root)
+            self.canvas.create_image(
+                width // 2,
+                height // 2,
                 image=self.background_photo,
-                bg=TRANSPARENT,
-                bd=0,
-                padx=0,
-                pady=0,
+                anchor="center",
+                tags=("background",),
             )
-            self.background_widget.place(x=0, y=0, width=width, height=height)
-            self.background_widget.lower()
+            self.canvas.tag_lower("background")
         except (OSError, ValueError):
             self.background_photo = None
 
-    def add_key(self, parent, label, scan, width):
-        if not scan:
-            self.make_key(parent, label, width)
-            return
+    def add_key(self, x, y, label, scan, width):
+        ident = scan.upper() if scan else ""
+        shown = self.key_label(ident, label) if ident else label
+        key_width = self.key_width(width)
 
-        ident = scan.upper()
-        shown = self.key_label(ident, label)
-        widget = self.make_key(parent, shown, width)
-        self.keys.setdefault(ident, []).append(widget)
+        fill = self.settings.get("key_fill") or ""
+        outline = self.settings["outline_color"]
 
-        match = re.fullmatch(r"F(\d{1,2})", label)
-        if match:
-            self.function_keys[VK_F1 + int(match.group(1)) - 1] = ident
-
-    def make_key(self, parent, label, width):
-        fill = self.settings["key_fill"] or TRANSPARENT
-        widget = tk.Label(
-            parent,
-            text=label,
-            width=max(3, int(width * 4)),
-            height=1,
-            bg=fill,
-            fg=self.settings["text_color"],
-            font=(self.settings["font_family"], self.settings["font_size"], "bold"),
-            relief="flat",
-            bd=0,
-            highlightbackground=self.settings["outline_color"],
-            highlightcolor=self.settings["outline_color"],
-            highlightthickness=1,
-            padx=2,
-            pady=5,
+        rectangle = self.canvas.create_rectangle(
+            x,
+            y,
+            x + key_width,
+            y + KEY_HEIGHT,
+            fill=fill,
+            outline=outline,
+            width=1,
         )
-        widget.pack(side="left", padx=2)
-        return widget
+        text = self.canvas.create_text(
+            x + key_width // 2,
+            y + KEY_HEIGHT // 2,
+            text=shown,
+            fill=self.settings["text_color"],
+            font=(self.settings["font_family"], self.settings["font_size"], "bold"),
+        )
+
+        if ident:
+            self.keys.setdefault(ident, []).append((rectangle, text))
+
+            match = re.fullmatch(r"F(\d{1,2})", label)
+            if match:
+                self.function_keys[VK_F1 + int(match.group(1)) - 1] = ident
 
     def key_label(self, ident, fallback):
         if self.auto_labels and len(fallback) == 1 and fallback.isprintable():
@@ -310,20 +351,11 @@ class KeyboardOverlayApp:
 
     def place_bottom_left(self):
         self.root.update_idletasks()
-        self.root.geometry(
-            f"+12+{self.root.winfo_screenheight() - self.root.winfo_reqheight() - 48}"
-        )
-
-    def update_lock_label(self):
-        if self.locked:
-            text = (
-                f"LOCKED · press "
-                f"{self.settings.get('lock_key', 'Shift')} to unlock"
-            )
-        else:
-            text = "drag · ⚙ for options"
-
-        self.status_label.configure(text=text)
+        height = self.root.winfo_height()
+        if height <= 1:
+            height = self.root.winfo_reqheight()
+        y = max(0, self.root.winfo_screenheight() - height - 48)
+        self.root.geometry(f"+12+{y}")
 
     def set_mouse_passthrough(self):
         style = self.user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
@@ -347,10 +379,19 @@ class KeyboardOverlayApp:
     def toggle_lock(self):
         self.locked = not self.locked
         self.set_mouse_passthrough()
-        self.update_lock_label()
+        text = (
+            f"LOCKED · press {self.settings.get('lock_key', 'Shift')} to unlock"
+            if self.locked
+            else "drag · ⚙ for options"
+        )
+        self.canvas.itemconfigure(self.status_item, text=text)
 
     def start_drag(self, event):
         if self.locked:
+            return
+
+        if event.y <= HEADER_HEIGHT and event.x >= self.canvas.winfo_width() - 28:
+            self.open_options()
             return
 
         self.drag_x = event.x_root - self.root.winfo_x()
@@ -442,22 +483,24 @@ class KeyboardOverlayApp:
         self.build()
 
     def open_settings(self):
-        if self.locked:
-            return
-
-        SettingsDialog(self.root, self.settings, self.preview_settings)
+        if not self.locked:
+            SettingsDialog(self.root, self.settings, self.preview_settings)
 
     def preview_settings(self, values):
         self.settings = dict(values)
         self.build()
 
     def flash(self, ident, pressed):
-        for widget in self.keys.get(ident, []):
-            widget.configure(
-                bg=self.settings["pressed_color"]
+        for rectangle, text in self.keys.get(ident, []):
+            self.canvas.itemconfigure(
+                rectangle,
+                fill=self.settings["pressed_color"]
                 if pressed
-                else (self.settings["key_fill"] or TRANSPARENT),
-                fg=self.settings["text_color"],
+                else (self.settings.get("key_fill") or ""),
+            )
+            self.canvas.itemconfigure(
+                text,
+                fill=self.settings["text_color"],
             )
 
     def process_events(self):
@@ -468,7 +511,6 @@ class KeyboardOverlayApp:
                 break
 
             ident = self.function_keys.get(vk, ident)
-
             lock_name = self.settings.get("lock_key", "Shift")
             lock_codes = LOCK_KEY_VKS.get(lock_name, LOCK_KEY_VKS["Shift"])
 
