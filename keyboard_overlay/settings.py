@@ -538,13 +538,10 @@ class SettingsDialog:
                 parent=self.window,
             )
 
-def set_background_crop(self, path):
-    self.draft["background_image"] = path
-    self.background_label.configure(
-        text=Path(path).name,
-        fg=TEXT,
-    )
-    self.preview()
+    def set_background_crop(self, path):
+        self.draft["background_image"] = path
+        self.background_label.configure(text=Path(path).name, fg=TEXT)
+        self.preview()
 
     def remove_background(self):
         self.draft["background_image"] = ""
