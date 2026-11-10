@@ -236,13 +236,18 @@ class KeyboardOverlayApp:
 
         try:
             with Image.open(path) as source:
-                image = ImageOps.fit(
+                image = ImageOps.contain(
                     source.convert("RGBA"),
                     (width, height),
                     method=Image.Resampling.LANCZOS,
                 )
 
-            self.background_photo = ImageTk.PhotoImage(image, master=self.root)
+            canvas = Image.new("RGBA", (width, height), (1, 2, 3, 0))
+            x = (width - image.width) // 2
+            y = (height - image.height) // 2
+            canvas.alpha_composite(image, (x, y))
+
+            self.background_photo = ImageTk.PhotoImage(canvas, master=self.root)
             self.background_widget = tk.Label(
                 self.root,
                 image=self.background_photo,
@@ -251,12 +256,7 @@ class KeyboardOverlayApp:
                 padx=0,
                 pady=0,
             )
-            self.background_widget.place(
-                x=0,
-                y=0,
-                width=width,
-                height=height,
-            )
+            self.background_widget.place(x=0, y=0, width=width, height=height)
             self.background_widget.lower()
         except (OSError, ValueError):
             self.background_photo = None
