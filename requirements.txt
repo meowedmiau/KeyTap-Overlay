@@ -1,2 +1,3 @@
-# Runtime: Python standard library only. See requirements-build.txt for packaging.
+# Runtime requirements
 Pillow>=10.0
+imageio-ffmpeg>=0.5.1
