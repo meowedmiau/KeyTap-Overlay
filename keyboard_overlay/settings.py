@@ -24,6 +24,8 @@ DEFAULTS = {
     "lock_key": "Shift",
     "background_image": "",
     "keyboard_scale": 100,
+    "layout_name": "",
+    "compact": False,
 }
 
 BG = "#f3f6fa"

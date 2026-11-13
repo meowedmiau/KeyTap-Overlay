@@ -13,7 +13,7 @@ from PIL import Image, ImageOps, ImageTk
 
 from .keyboard_hook import KeyboardHook
 from .layouts import load_layouts, user_layout_file
-from .settings import SettingsDialog, load_settings
+from .settings import SettingsDialog, load_settings, save_settings
 from .updates import check_latest_release, current_version, download_and_launch_update
 
 TRANSPARENT = "#010203"
@@ -70,12 +70,21 @@ class KeyboardOverlayApp:
 
         self.settings = load_settings()
         self.layouts = load_layouts()
-        self.layout_name = next(
-            (name for name, item in self.layouts.items() if item.get("group") == "PC"),
-            next(iter(self.layouts)),
-        )
 
-        self.compact = False
+        saved_layout = self.settings.get("layout_name", "")
+        self.layout_name = (
+            saved_layout
+            if saved_layout in self.layouts
+            else next(
+                (
+                    name for name, item in self.layouts.items()
+                    if item.get("group") == "PC"
+                ),
+                next(iter(self.layouts)),
+            )
+        )
+        self.compact = bool(self.settings.get("compact", False))
+
         self.locked = False
         self.lock_key_scans = set()
         self.auto_labels = True
@@ -137,7 +146,10 @@ class KeyboardOverlayApp:
     @property
     def scale(self):
         try:
-            return min(1.5, max(0.5, float(self.settings.get("keyboard_scale", 100)) / 100))
+            return min(
+                1.5,
+                max(0.5, float(self.settings.get("keyboard_scale", 100)) / 100),
+            )
         except (TypeError, ValueError):
             return 1.0
 
@@ -236,7 +248,7 @@ class KeyboardOverlayApp:
             self.canvas.configure(bg=PANEL_COLOR)
             self.set_background_image(image_path, canvas_width, canvas_height)
 
-        self.canvas.create_text(
+        self.layout_title_item = self.canvas.create_text(
             self.scaled(8),
             self.header_height // 2,
             text=self.layout_name,
@@ -249,15 +261,10 @@ class KeyboardOverlayApp:
             ),
         )
 
-        lock_text = (
-            f"LOCKED · press {self.settings.get('lock_key', 'Shift')} to unlock"
-            if self.locked
-            else "drag · ⚙ for options"
-        )
         self.status_item = self.canvas.create_text(
             canvas_width - self.scaled(31),
             self.header_height // 2,
-            text=lock_text,
+            text="drag · ⚙ for options",
             anchor="e",
             fill=self.settings["text_color"],
             font=(
@@ -274,6 +281,7 @@ class KeyboardOverlayApp:
             fill=self.settings["text_color"],
             font=("Segoe UI Symbol", self.scaled(11, minimum=6), "bold"),
         )
+        self.update_lock_indicators()
 
         body_y = self.header_height + self.scaled(3)
 
@@ -287,7 +295,6 @@ class KeyboardOverlayApp:
 
         if clusters:
             cluster_x = x_right
-
             for cluster in clusters:
                 for row_index, row in enumerate(cluster["rows"]):
                     x = cluster_x
@@ -313,6 +320,12 @@ class KeyboardOverlayApp:
         self.root.geometry(
             f"{canvas_width}x{canvas_height}+{max(0, old_x)}+{max(0, old_y)}"
         )
+
+    def update_lock_indicators(self):
+        state = "hidden" if self.locked else "normal"
+        self.canvas.itemconfigure(self.layout_title_item, state=state)
+        self.canvas.itemconfigure(self.status_item, state=state)
+        self.canvas.itemconfigure(self.gear_item, state=state)
 
     def set_background_image(self, path, width, height):
         try:
@@ -413,18 +426,16 @@ class KeyboardOverlayApp:
     def toggle_lock(self):
         self.locked = not self.locked
         self.set_mouse_passthrough()
-        text = (
-            f"LOCKED · press {self.settings.get('lock_key', 'Shift')} to unlock"
-            if self.locked
-            else "drag · ⚙ for options"
-        )
-        self.canvas.itemconfigure(self.status_item, text=text)
+        self.update_lock_indicators()
 
     def start_drag(self, event):
         if self.locked:
             return
 
-        if event.y <= self.header_height and event.x >= self.canvas.winfo_width() - self.scaled(28):
+        if (
+            event.y <= self.header_height
+            and event.x >= self.canvas.winfo_width() - self.scaled(28)
+        ):
             self.open_options()
             return
 
@@ -502,10 +513,14 @@ class KeyboardOverlayApp:
         self.active_chords.clear()
         self.layout_name = name
         self.auto_labels = False
+        self.settings["layout_name"] = name
+        save_settings(self.settings)
         self.build()
 
     def toggle_compact(self):
         self.compact = not self.compact
+        self.settings["compact"] = self.compact
+        save_settings(self.settings)
         self.build()
 
     def toggle_auto_labels(self):
