@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install build tool
+      - name: Install build dependencies
         run: python -m pip install -r requirements-build.txt
 
       - name: Check release tag
@@ -34,7 +34,11 @@ jobs:
       - name: Build executable and download archive
         shell: pwsh
         run: |
-          pyinstaller --noconfirm --clean --windowed --onefile --name KeyTap-Overlay --icon "assets/keytap.ico" --add-data "data;data" --add-data "VERSION;." main.pyw
+          pyinstaller --noconfirm --clean --windowed --onefile --name KeyTap-Overlay --icon "assets/keytap.ico" --add-data "data;data" --add-data "VERSION;." --collect-all imageio_ffmpeg main.pyw
+          if ($LASTEXITCODE -ne 0) {
+            throw "PyInstaller build failed."
+          }
+
           $version = (Get-Content VERSION -Raw).Trim()
           Compress-Archive -Path @("dist\KeyTap-Overlay.exe", "README.md", "LICENSE") -DestinationPath "dist\KeyTap-Overlay-$version-Windows.zip" -Force
 
