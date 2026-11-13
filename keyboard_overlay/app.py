@@ -5,10 +5,12 @@ import os
 import queue
 import re
 import threading
+import time
 import tkinter as tk
 import webbrowser
 from tkinter import messagebox
 
+import imageio_ffmpeg
 from PIL import Image, ImageOps, ImageTk
 
 from .keyboard_hook import KeyboardHook
@@ -59,6 +61,67 @@ NUMPAD_ROWS = [
 ]
 
 
+class VideoReader:
+    """Decode video frames in the background and keep only the newest one."""
+
+    def __init__(self, path):
+        self.path = path
+        self.frames = queue.Queue(maxsize=2)
+        self.stop_event = threading.Event()
+        self.error = None
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _put_frame(self, frame, width, height):
+        if self.frames.full():
+            try:
+                self.frames.get_nowait()
+            except queue.Empty:
+                pass
+
+        try:
+            self.frames.put_nowait((frame, width, height))
+        except queue.Full:
+            pass
+
+    def _run(self):
+        while not self.stop_event.is_set():
+            reader = None
+            try:
+                reader = imageio_ffmpeg.read_frames(
+                    self.path,
+                    pix_fmt="rgb24",
+                )
+                metadata = next(reader)
+                width, height = metadata["size"]
+                fps = max(1.0, float(metadata.get("fps", 30)))
+                interval = 1.0 / min(fps, 30.0)
+
+                while not self.stop_event.is_set():
+                    started = time.monotonic()
+                    frame = next(reader)
+                    self._put_frame(frame, width, height)
+                    remaining = interval - (time.monotonic() - started)
+                    if remaining > 0:
+                        self.stop_event.wait(remaining)
+
+            except StopIteration:
+                # Reopen at the end of the clip to loop it.
+                continue
+            except Exception as exc:
+                self.error = str(exc)
+                return
+            finally:
+                if reader is not None:
+                    try:
+                        reader.close()
+                    except Exception:
+                        pass
+
+    def stop(self):
+        self.stop_event.set()
+
+
 class KeyboardOverlayApp:
     def __init__(self):
         self.root = tk.Tk()
@@ -96,7 +159,12 @@ class KeyboardOverlayApp:
         self.events = queue.SimpleQueue()
         self.update_results = queue.SimpleQueue()
         self.update_checking = False
+
         self.background_photo = None
+        self.video_reader = None
+        self.video_after_id = None
+        self.video_background_item = None
+        self.video_error_shown = False
 
         self.user32 = ctypes.windll.user32
         self.user32.GetKeyNameTextW.argtypes = (
@@ -129,13 +197,13 @@ class KeyboardOverlayApp:
         self.build()
         self.place_bottom_left()
         self.hwnd = ctypes.wintypes.HWND(self.root.winfo_id())
-
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         try:
             self.hook = KeyboardHook(self.events)
         except OSError as exc:
             messagebox.showerror("KeyTap Overlay", str(exc))
+            self.stop_video_background()
             self.root.destroy()
             return
 
@@ -166,7 +234,21 @@ class KeyboardOverlayApp:
     def row_width(self, row):
         return sum(self.cell_width(item[2]) for item in row)
 
+    def stop_video_background(self):
+        if self.video_after_id is not None:
+            try:
+                self.root.after_cancel(self.video_after_id)
+            except tk.TclError:
+                pass
+            self.video_after_id = None
+
+        if self.video_reader is not None:
+            self.video_reader.stop()
+            self.video_reader = None
+
     def build(self):
+        self.stop_video_background()
+
         for child in self.root.winfo_children():
             if not isinstance(child, tk.Toplevel):
                 child.destroy()
@@ -175,8 +257,8 @@ class KeyboardOverlayApp:
         old_y = self.root.winfo_y()
 
         self.keys = {}
-        self.function_keys = {}
         self.background_photo = None
+        self.video_background_item = None
 
         self.header_height = self.scaled(BASE_HEADER_HEIGHT, minimum=12)
         self.key_height = self.scaled(BASE_KEY_HEIGHT, minimum=12)
@@ -201,7 +283,10 @@ class KeyboardOverlayApp:
         main_width = max((self.row_width(row) for row in display_rows), default=0)
         clusters = []
         if not self.compact:
-            clusters = layout.get("right", [{"rows": NAV_ROWS}, {"rows": NUMPAD_ROWS}])
+            clusters = layout.get(
+                "right",
+                [{"rows": NAV_ROWS}, {"rows": NUMPAD_ROWS}],
+            )
 
         x_right = self.scaled(5) + main_width + self.side_gap
         right_width = 0
@@ -225,8 +310,7 @@ class KeyboardOverlayApp:
             + main_width
             + (self.side_gap + right_width if clusters else 0),
         )
-        main_row_count = len(display_rows)
-        row_count = max(main_row_count, right_rows)
+        row_count = max(len(display_rows), right_rows)
         canvas_height = (
             self.header_height
             + self.scaled(5)
@@ -243,8 +327,13 @@ class KeyboardOverlayApp:
         )
         self.canvas.pack(fill="both", expand=True)
 
+        video_path = self.settings.get("background_video", "")
         image_path = self.settings.get("background_image", "")
-        if image_path and os.path.isfile(image_path):
+
+        if video_path and os.path.isfile(video_path):
+            self.canvas.configure(bg=PANEL_COLOR)
+            self.start_video_background(video_path, canvas_width, canvas_height)
+        elif image_path and os.path.isfile(image_path):
             self.canvas.configure(bg=PANEL_COLOR)
             self.set_background_image(image_path, canvas_width, canvas_height)
 
@@ -260,7 +349,6 @@ class KeyboardOverlayApp:
                 "bold",
             ),
         )
-
         self.status_item = self.canvas.create_text(
             canvas_width - self.scaled(31),
             self.header_height // 2,
@@ -272,7 +360,6 @@ class KeyboardOverlayApp:
                 self.scaled(max(7, self.settings["font_size"] - 2), minimum=5),
             ),
         )
-
         self.gear_item = self.canvas.create_text(
             canvas_width - self.scaled(8),
             self.header_height // 2,
@@ -321,6 +408,73 @@ class KeyboardOverlayApp:
             f"{canvas_width}x{canvas_height}+{max(0, old_x)}+{max(0, old_y)}"
         )
 
+    def start_video_background(self, path, width, height):
+        self.video_error_shown = False
+        self.video_reader = VideoReader(path)
+        self.video_background_item = self.canvas.create_image(
+            width // 2,
+            height // 2,
+            anchor="center",
+            tags=("background",),
+        )
+        self.canvas.tag_lower("background")
+        self.poll_video_frames(width, height)
+
+    def poll_video_frames(self, width, height):
+        if self.video_reader is None:
+            return
+
+        if self.video_reader.error and not self.video_error_shown:
+            self.video_error_shown = True
+            messagebox.showerror(
+                "KeyTap Overlay",
+                f"Could not play this video:\n\n{self.video_reader.error}",
+                parent=self.root,
+            )
+
+        newest = None
+        try:
+            while True:
+                newest = self.video_reader.frames.get_nowait()
+        except queue.Empty:
+            pass
+
+        if newest is not None:
+            frame_data, frame_width, frame_height = newest
+            try:
+                frame = Image.frombytes(
+                    "RGB",
+                    (frame_width, frame_height),
+                    frame_data,
+                )
+
+                crop = self.settings.get("background_video_crop")
+                if crop and len(crop) == 4:
+                    left, top, right, bottom = crop
+                    left = max(0, min(frame_width - 1, int(left * frame_width)))
+                    top = max(0, min(frame_height - 1, int(top * frame_height)))
+                    right = max(left + 1, min(frame_width, int(right * frame_width)))
+                    bottom = max(top + 1, min(frame_height, int(bottom * frame_height)))
+                    frame = frame.crop((left, top, right, bottom))
+
+                frame = ImageOps.fit(
+                    frame,
+                    (width, height),
+                    method=Image.Resampling.LANCZOS,
+                )
+                self.background_photo = ImageTk.PhotoImage(frame, master=self.root)
+                self.canvas.itemconfigure(
+                    self.video_background_item,
+                    image=self.background_photo,
+                )
+            except (tk.TclError, ValueError):
+                pass
+
+        self.video_after_id = self.root.after(
+            30,
+            lambda: self.poll_video_frames(width, height),
+        )
+
     def update_lock_indicators(self):
         state = "hidden" if self.locked else "normal"
         self.canvas.itemconfigure(self.layout_title_item, state=state)
@@ -353,16 +507,13 @@ class KeyboardOverlayApp:
         shown = self.key_label(ident, label) if ident else label
         key_width = self.key_width(width)
 
-        fill = self.settings.get("key_fill") or ""
-        outline = self.settings["outline_color"]
-
         rectangle = self.canvas.create_rectangle(
             x,
             y,
             x + key_width,
             y + self.key_height,
-            fill=fill,
-            outline=outline,
+            fill=self.settings.get("key_fill") or "",
+            outline=self.settings["outline_color"],
             width=self.scaled(1),
         )
         text = self.canvas.create_text(
@@ -379,7 +530,6 @@ class KeyboardOverlayApp:
 
         if ident:
             self.keys.setdefault(ident, []).append((rectangle, text))
-
             match = re.fullmatch(r"F(\d{1,2})", label)
             if match:
                 self.function_keys[VK_F1 + int(match.group(1)) - 1] = ident
@@ -389,11 +539,9 @@ class KeyboardOverlayApp:
             scan = int(ident[-2:], 16)
             lparam = (scan << 16) | (int(ident.startswith("E")) << 24)
             buffer = ctypes.create_unicode_buffer(32)
-
             if self.user32.GetKeyNameTextW(lparam, buffer, len(buffer)) > 0:
                 if len(buffer.value) == 1:
                     return buffer.value.upper()
-
         return fallback
 
     def place_bottom_left(self):
@@ -406,7 +554,6 @@ class KeyboardOverlayApp:
 
     def set_mouse_passthrough(self):
         style = self.user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
-
         if self.locked:
             style |= WS_EX_TRANSPARENT
         else:
@@ -431,7 +578,6 @@ class KeyboardOverlayApp:
     def start_drag(self, event):
         if self.locked:
             return
-
         if (
             event.y <= self.header_height
             and event.x >= self.canvas.winfo_width() - self.scaled(28)
@@ -443,32 +589,27 @@ class KeyboardOverlayApp:
         self.drag_y = event.y_root - self.root.winfo_y()
 
     def drag(self, event):
-        if self.locked:
-            return
-
-        self.root.geometry(
-            f"+{event.x_root - self.drag_x}+{event.y_root - self.drag_y}"
-        )
+        if not self.locked:
+            self.root.geometry(
+                f"+{event.x_root - self.drag_x}+{event.y_root - self.drag_y}"
+            )
 
     def menu(self, event):
-        if self.locked:
-            return
-        self.show_options_menu(event.x_root, event.y_root)
+        if not self.locked:
+            self.show_options_menu(event.x_root, event.y_root)
 
     def open_options(self):
-        if self.locked:
-            return
-        self.show_options_menu(
-            self.root.winfo_pointerx(),
-            self.root.winfo_pointery(),
-        )
+        if not self.locked:
+            self.show_options_menu(
+                self.root.winfo_pointerx(),
+                self.root.winfo_pointery(),
+            )
 
     def show_options_menu(self, x, y):
         if self.locked:
             return
 
         menu = tk.Menu(self.root, tearoff=False)
-
         for group in ("PC", "Laptop"):
             submenu = tk.Menu(menu, tearoff=False)
             for name, layout in self.layouts.items():
@@ -576,7 +717,6 @@ class KeyboardOverlayApp:
                     self.lock_key_scans.discard(ident)
 
             chords = self.layouts[self.layout_name].get("chords", {})
-
             if pressed and ident not in self.down:
                 self.down.add(ident)
                 self.flash(ident, True)
@@ -626,7 +766,6 @@ class KeyboardOverlayApp:
 
             if kind == "checked":
                 self.update_checking = False
-
                 if result is None:
                     if manual:
                         messagebox.showinfo(
@@ -699,6 +838,7 @@ class KeyboardOverlayApp:
         threading.Thread(target=install, daemon=True).start()
 
     def close(self):
+        self.stop_video_background()
         if hasattr(self, "hook"):
             self.hook.close()
         self.root.destroy()

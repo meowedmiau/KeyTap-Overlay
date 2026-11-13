@@ -8,8 +8,7 @@ import tkinter as tk
 from tkinter import colorchooser, filedialog, font as tkfont, messagebox, ttk
 from uuid import uuid4
 
-from .background_editor import BackgroundCropDialog
-
+from .background_editor import BackgroundCropDialog, VideoBackgroundCropDialog
 from PIL import Image
 
 
@@ -23,6 +22,8 @@ DEFAULTS = {
     "font_size": 9,
     "lock_key": "Shift",
     "background_image": "",
+    "background_video": "",
+    "background_video_crop": None,
     "keyboard_scale": 100,
     "layout_name": "",
     "compact": False,
@@ -50,6 +51,11 @@ IMAGE_FILETYPES = [
     ("All files", "*.*"),
 ]
 
+VIDEO_FILETYPES = [
+    ("Videos", "*.mp4 *.mkv *.mov *.avi *.webm *.m4v"),
+    ("All files", "*.*"),
+]
+
 
 def settings_path():
     root = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
@@ -74,6 +80,10 @@ def load_settings():
         settings["keyboard_scale"] = min(
             150, max(50, int(settings.get("keyboard_scale", 100)))
         )
+
+        if settings.get("background_video"):
+            settings["background_image"] = ""
+
         return settings
     except (OSError, ValueError, TypeError):
         return dict(DEFAULTS)
@@ -137,16 +147,8 @@ class SettingsDialog:
             sliderlength=18,
             sliderthickness=22,
         )
-        style.configure(
-            "Overlay.TCombobox",
-            padding=6,
-            fieldbackground="#ffffff",
-        )
-        style.configure(
-            "Overlay.TButton",
-            padding=(12, 7),
-            font=("Segoe UI", 9),
-        )
+        style.configure("Overlay.TCombobox", padding=6, fieldbackground="#ffffff")
+        style.configure("Overlay.TButton", padding=(12, 7), font=("Segoe UI", 9))
         style.configure(
             "Overlay.Primary.TButton",
             padding=(14, 8),
@@ -154,12 +156,8 @@ class SettingsDialog:
             background=ACCENT,
             font=("Segoe UI", 9, "bold"),
         )
-        style.map(
-            "Overlay.Primary.TButton",
-            background=[("active", "#1572bd")],
-        )
+        style.map("Overlay.Primary.TButton", background=[("active", "#1572bd")])
 
-        # Scrollable settings content, with action buttons fixed below it.
         outer = tk.Frame(self.window, bg=BG)
         outer.pack(fill="both", expand=True)
 
@@ -181,9 +179,6 @@ class SettingsDialog:
         content.pack(fill="both", expand=True, padx=8, pady=(8, 0))
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-
-        self._scroll_canvas = canvas
-        self._scroll_shell = shell
 
         def on_mousewheel(event):
             canvas.yview_scroll(int(-event.delta / 120), "units")
@@ -210,12 +205,7 @@ class SettingsDialog:
             font=("Segoe UI", 10),
         ).pack(anchor="w", pady=(3, 12))
 
-        self.preview_card = tk.Frame(
-            shell,
-            bg="#eaf2f9",
-            padx=13,
-            pady=9,
-        )
+        self.preview_card = tk.Frame(shell, bg="#eaf2f9", padx=13, pady=9)
         self.preview_card.pack(fill="x", pady=(0, 10))
 
         tk.Label(
@@ -237,11 +227,7 @@ class SettingsDialog:
                 width=4,
                 pady=4,
                 padx=2,
-                font=(
-                    self.draft["font_family"],
-                    self.draft["font_size"],
-                    "bold",
-                ),
+                font=(self.draft["font_family"], self.draft["font_size"], "bold"),
                 relief="flat",
                 highlightthickness=1,
             )
@@ -261,9 +247,7 @@ class SettingsDialog:
         scale_row = tk.Frame(self.last_card, bg=CARD)
         scale_row.pack(fill="x", padx=15, pady=(0, 9))
 
-        self.keyboard_scale_var = tk.DoubleVar(
-            value=self.draft["keyboard_scale"]
-        )
+        self.keyboard_scale_var = tk.DoubleVar(value=self.draft["keyboard_scale"])
         ttk.Scale(
             scale_row,
             from_=50,
@@ -321,12 +305,7 @@ class SettingsDialog:
 
         for index, (title, setting, description) in enumerate(self.COLORS):
             cell = tk.Frame(color_grid, bg=CARD, padx=3, pady=3)
-            cell.grid(
-                row=index // 2,
-                column=index % 2,
-                sticky="ew",
-                padx=3,
-            )
+            cell.grid(row=index // 2, column=index % 2, sticky="ew", padx=3)
             color_grid.grid_columnconfigure(index % 2, weight=1)
 
             tk.Label(
@@ -423,17 +402,20 @@ class SettingsDialog:
 
         self.card(
             shell,
-            "BACKGROUND IMAGE",
-            "Choose an image to fit behind the keyboard.",
+            "BACKGROUND",
+            "Choose an image or a looping video and position its crop.",
         )
         background_row = tk.Frame(self.last_card, bg=CARD)
         background_row.pack(fill="x", padx=15, pady=(0, 9))
 
-        background_path = self.draft.get("background_image", "")
-        background_name = Path(background_path).name if background_path else "None"
+        active_background = (
+            self.draft.get("background_video")
+            or self.draft.get("background_image")
+            or ""
+        )
         self.background_label = tk.Label(
             background_row,
-            text=background_name,
+            text=Path(active_background).name if active_background else "None",
             bg=CARD,
             fg=MUTED,
             anchor="w",
@@ -451,6 +433,18 @@ class SettingsDialog:
             pady=3,
             command=self.choose_background,
         ).pack(side="left", padx=(7, 0))
+
+        tk.Button(
+            background_row,
+            text="Choose video",
+            relief="flat",
+            bg="#edf3f8",
+            fg=TEXT,
+            activebackground="#dfeaf3",
+            padx=9,
+            pady=3,
+            command=self.choose_video,
+        ).pack(side="left", padx=(5, 0))
 
         tk.Button(
             background_row,
@@ -480,7 +474,6 @@ class SettingsDialog:
         )
         self.lock_box.pack(side="left", fill="x", expand=True)
 
-        # Buttons are outside the scroll region, so they remain on screen.
         buttons = tk.Frame(outer, bg=BG, padx=18, pady=10)
         buttons.pack(fill="x", side="bottom")
 
@@ -544,12 +537,12 @@ class SettingsDialog:
         fill = self.draft["key_fill"] or "#eaf2f9"
 
         for index, key in enumerate(self.preview_keys):
-            is_pressed = index == 2
+            pressed = index == 2
             key.configure(
-                bg=self.draft["pressed_color"] if is_pressed else fill,
+                bg=self.draft["pressed_color"] if pressed else fill,
                 fg=readable_on(
                     self.draft["pressed_color"]
-                    if is_pressed
+                    if pressed
                     else self.draft["text_color"]
                 ),
                 highlightbackground=self.draft["outline_color"],
@@ -563,8 +556,10 @@ class SettingsDialog:
 
         for _, setting, _ in self.COLORS:
             swatch = getattr(self, f"swatch_{setting}")
-            color = self.draft.get(setting) or "#eaf2f9"
-            swatch.configure(bg=color, highlightbackground=LINE)
+            swatch.configure(
+                bg=self.draft.get(setting) or "#eaf2f9",
+                highlightbackground=LINE,
+            )
 
     def preview(self):
         self.update_sample()
@@ -603,7 +598,7 @@ class SettingsDialog:
     def choose_background(self):
         selected = filedialog.askopenfilename(
             parent=self.window,
-            title="Choose keyboard background",
+            title="Choose keyboard background image",
             filetypes=IMAGE_FILETYPES,
         )
         if not selected:
@@ -614,7 +609,7 @@ class SettingsDialog:
                 self.window,
                 selected,
                 self.background_aspect,
-                self.set_background_crop,
+                self.set_background_image,
             )
         except (OSError, ValueError) as exc:
             messagebox.showerror(
@@ -623,13 +618,55 @@ class SettingsDialog:
                 parent=self.window,
             )
 
-    def set_background_crop(self, path):
+    def set_background_image(self, path):
         self.draft["background_image"] = path
+        self.draft["background_video"] = ""
+        self.draft["background_video_crop"] = None
         self.background_label.configure(text=Path(path).name, fg=TEXT)
         self.preview()
 
+    def choose_video(self):
+        selected = filedialog.askopenfilename(
+            parent=self.window,
+            title="Choose looping keyboard background video",
+            filetypes=VIDEO_FILETYPES,
+        )
+        if not selected:
+            return
+
+        try:
+            VideoBackgroundCropDialog(
+                self.window,
+                selected,
+                self.background_aspect,
+                self.set_background_video,
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "KeyTap Overlay",
+                f"Could not open that video:\n{exc}",
+                parent=self.window,
+            )
+
+    def set_background_video(self, source_path, crop):
+        try:
+            saved_path = copy_background_image(source_path)
+            self.draft["background_video"] = saved_path
+            self.draft["background_video_crop"] = list(crop)
+            self.draft["background_image"] = ""
+            self.background_label.configure(text=Path(saved_path).name, fg=TEXT)
+            self.preview()
+        except OSError as exc:
+            messagebox.showerror(
+                "KeyTap Overlay",
+                f"Could not copy that video:\n{exc}",
+                parent=self.window,
+            )
+
     def remove_background(self):
         self.draft["background_image"] = ""
+        self.draft["background_video"] = ""
+        self.draft["background_video_crop"] = None
         self.background_label.configure(text="None", fg=MUTED)
         self.preview()
 

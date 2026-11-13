@@ -1,17 +1,25 @@
+"""Crop editors for still-image and video keyboard backgrounds."""
+
 import os
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
 from uuid import uuid4
 
+import imageio_ffmpeg
 from PIL import Image, ImageTk
 
 
-class BackgroundCropDialog:
-    def __init__(self, parent, image_path, aspect_ratio, on_save):
-        with Image.open(image_path) as image:
-            self.image = image.convert("RGBA")
+BG = "#f3f6fa"
+TEXT = "#172033"
+MUTED = "#69758a"
 
+
+class _CropDialog:
+    """Shared draggable, zoomable crop preview with a keyboard guide."""
+
+    def __init__(self, parent, image, aspect_ratio, title, on_save):
+        self.image = image.convert("RGBA")
         self.aspect = max(1.0, float(aspect_ratio))
         self.view_width = 640
         self.view_height = max(180, round(self.view_width / self.aspect))
@@ -23,28 +31,29 @@ class BackgroundCropDialog:
         self.photo = None
 
         self.window = tk.Toplevel(parent)
-        self.window.title("Fit keyboard background")
+        self.window.title(title)
         self.window.transient(parent)
         self.window.attributes("-topmost", True)
         self.window.resizable(False, False)
-        self.window.configure(bg="#f3f6fa")
+        self.window.configure(bg=BG)
+        self.window.protocol("WM_DELETE_WINDOW", self.window.destroy)
 
-        shell = tk.Frame(self.window, bg="#f3f6fa", padx=18, pady=16)
+        shell = tk.Frame(self.window, bg=BG, padx=18, pady=16)
         shell.pack(fill="both", expand=True)
 
         tk.Label(
             shell,
             text="Position your background",
-            bg="#f3f6fa",
-            fg="#172033",
+            bg=BG,
+            fg=TEXT,
             font=("Segoe UI", 16, "bold"),
         ).pack(anchor="w")
 
         tk.Label(
             shell,
-            text="Drag the image to move it. Adjust zoom, then save the crop.",
-            bg="#f3f6fa",
-            fg="#69758a",
+            text="Drag to move the preview. Adjust zoom, then use this crop.",
+            bg=BG,
+            fg=MUTED,
             font=("Segoe UI", 9),
         ).pack(anchor="w", pady=(3, 12))
 
@@ -62,14 +71,14 @@ class BackgroundCropDialog:
         self.canvas.bind("<ButtonPress-1>", self.start_drag)
         self.canvas.bind("<B1-Motion>", self.drag)
 
-        zoom_row = tk.Frame(shell, bg="#f3f6fa")
+        zoom_row = tk.Frame(shell, bg=BG)
         zoom_row.pack(fill="x", pady=(10, 4))
 
         tk.Label(
             zoom_row,
             text="Zoom",
-            bg="#f3f6fa",
-            fg="#172033",
+            bg=BG,
+            fg=TEXT,
         ).pack(side="left")
 
         self.zoom_var = tk.DoubleVar(value=1.0)
@@ -85,12 +94,12 @@ class BackgroundCropDialog:
             zoom_row,
             text="1.0×",
             width=5,
-            bg="#f3f6fa",
-            fg="#172033",
+            bg=BG,
+            fg=TEXT,
         )
         self.zoom_label.pack(side="right")
 
-        buttons = tk.Frame(shell, bg="#f3f6fa")
+        buttons = tk.Frame(shell, bg=BG)
         buttons.pack(fill="x", pady=(10, 0))
 
         ttk.Button(
@@ -152,8 +161,15 @@ class BackgroundCropDialog:
             [("Tab", 1.4)] + [(key, 1) for key in "QWERTYUIOP[]\\"],
             [("Caps", 1.7)] + [(key, 1) for key in "ASDFGHJKL;'"] + [("Enter", 1.7)],
             [("Shift", 2.1)] + [(key, 1) for key in "ZXCVBNM,./"] + [("Shift", 2.1)],
-            [("Ctrl", 1.3), ("Win", 1.2), ("Alt", 1.2), ("Space", 5.5),
-             ("Alt", 1.2), ("Menu", 1.2), ("Ctrl", 1.3)],
+            [
+                ("Ctrl", 1.3),
+                ("Win", 1.2),
+                ("Alt", 1.2),
+                ("Space", 5.5),
+                ("Alt", 1.2),
+                ("Menu", 1.2),
+                ("Ctrl", 1.3),
+            ],
         ]
 
         max_units = max(sum(width for _, width in row) for row in rows)
@@ -172,7 +188,10 @@ class BackgroundCropDialog:
             for label, width in row:
                 key_width = width * unit
                 self.canvas.create_rectangle(
-                    x, y, x + key_width, y + key_height,
+                    x,
+                    y,
+                    x + key_width,
+                    y + key_height,
                     outline="#ffffff",
                     width=1,
                 )
@@ -210,6 +229,33 @@ class BackgroundCropDialog:
         self.zoom_label.configure(text=f"{self.zoom:.1f}×")
         self.render()
 
+    def normalized_crop(self):
+        box, _, _ = self.crop_box()
+        left, top, right, bottom = box
+        return (
+            left / self.image.width,
+            top / self.image.height,
+            right / self.image.width,
+            bottom / self.image.height,
+        )
+
+
+class BackgroundCropDialog(_CropDialog):
+    """Crop a still image and save the crop to the app's background folder."""
+
+    def __init__(self, parent, image_path, aspect_ratio, on_save):
+        with Image.open(image_path) as source:
+            image = source.convert("RGBA")
+
+        self.source_path = image_path
+        super().__init__(
+            parent,
+            image,
+            aspect_ratio,
+            "Fit keyboard background",
+            on_save,
+        )
+
     def save_crop(self):
         box, _, _ = self.crop_box()
         crop = self.image.crop(box)
@@ -227,4 +273,32 @@ class BackgroundCropDialog:
         crop.save(output_path, "PNG")
 
         self.on_save(str(output_path))
+        self.window.destroy()
+
+
+class VideoBackgroundCropDialog(_CropDialog):
+    """Choose and save a normalized crop rectangle for a video background."""
+
+    def __init__(self, parent, video_path, aspect_ratio, on_save):
+        self.video_path = video_path
+
+        reader = imageio_ffmpeg.read_frames(video_path, pix_fmt="rgb24")
+        try:
+            metadata = next(reader)
+            width, height = metadata["size"]
+            frame_data = next(reader)
+        finally:
+            reader.close()
+
+        frame = Image.frombytes("RGB", (width, height), frame_data).convert("RGBA")
+        super().__init__(
+            parent,
+            frame,
+            aspect_ratio,
+            "Fit keyboard video background",
+            on_save,
+        )
+
+    def save_crop(self):
+        self.on_save(self.video_path, self.normalized_crop())
         self.window.destroy()
