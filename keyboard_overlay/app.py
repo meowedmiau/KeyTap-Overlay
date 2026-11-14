@@ -11,7 +11,7 @@ import webbrowser
 from tkinter import messagebox
 
 import imageio_ffmpeg
-from PIL import Image, ImageOps, ImageTk
+from PIL import Image, ImageOps, ImageSequence, ImageTk
 
 from .keyboard_hook import KeyboardHook
 from .layouts import load_layouts, user_layout_file
@@ -61,8 +61,75 @@ NUMPAD_ROWS = [
 ]
 
 
+def apply_normalized_crop(frame, crop):
+    """Crop a PIL frame using normalized left, top, right, bottom coordinates."""
+    if not crop or len(crop) != 4:
+        return frame
+
+    width, height = frame.size
+    left, top, right, bottom = crop
+    left = max(0, min(width - 1, int(float(left) * width)))
+    top = max(0, min(height - 1, int(float(top) * height)))
+    right = max(left + 1, min(width, int(float(right) * width)))
+    bottom = max(top + 1, min(height, int(float(bottom) * height)))
+    return frame.crop((left, top, right, bottom))
+
+
+class GifReader:
+    """Read and loop GIF frames in a background thread."""
+
+    def __init__(self, path):
+        self.path = path
+        self.frames = queue.Queue(maxsize=2)
+        self.stop_event = threading.Event()
+        self.error = None
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _put_frame(self, frame_bytes, width, height, duration):
+        if self.frames.full():
+            try:
+                self.frames.get_nowait()
+            except queue.Empty:
+                pass
+
+        try:
+            self.frames.put_nowait((frame_bytes, width, height, duration))
+        except queue.Full:
+            pass
+
+    def _run(self):
+        while not self.stop_event.is_set():
+            try:
+                with Image.open(self.path) as gif:
+                    width, height = gif.size
+
+                    for frame in ImageSequence.Iterator(gif):
+                        if self.stop_event.is_set():
+                            return
+
+                        duration = max(20, int(frame.info.get("duration", 100)))
+                        rgb = frame.convert("RGB")
+                        self._put_frame(
+                            rgb.tobytes(),
+                            width,
+                            height,
+                            duration,
+                        )
+
+                        if self.stop_event.wait(duration / 1000):
+                            return
+
+            except Exception as exc:
+                self.error = str(exc)
+                return
+
+    def stop(self):
+        self.stop_event.set()
+
+
 class VideoReader:
-    """Decode video frames in the background and keep only the newest one."""
+    """Decode video frames in a background thread and loop the clip."""
 
     def __init__(self, path):
         self.path = path
@@ -106,7 +173,6 @@ class VideoReader:
                         self.stop_event.wait(remaining)
 
             except StopIteration:
-                # Reopen at the end of the clip to loop it.
                 continue
             except Exception as exc:
                 self.error = str(exc)
@@ -162,9 +228,12 @@ class KeyboardOverlayApp:
 
         self.background_photo = None
         self.video_reader = None
+        self.gif_reader = None
         self.video_after_id = None
+        self.gif_after_id = None
         self.video_background_item = None
-        self.video_error_shown = False
+        self.gif_background_item = None
+        self.background_error_shown = False
 
         self.user32 = ctypes.windll.user32
         self.user32.GetKeyNameTextW.argtypes = (
@@ -203,7 +272,7 @@ class KeyboardOverlayApp:
             self.hook = KeyboardHook(self.events)
         except OSError as exc:
             messagebox.showerror("KeyTap Overlay", str(exc))
-            self.stop_video_background()
+            self.stop_backgrounds()
             self.root.destroy()
             return
 
@@ -225,8 +294,7 @@ class KeyboardOverlayApp:
         return max(minimum, round(value * self.scale))
 
     def key_width(self, width):
-        base = max(3, int(width * 4)) * 8 + 4
-        return self.scaled(base)
+        return self.scaled(max(3, int(width * 4)) * 8 + 4)
 
     def cell_width(self, width):
         return self.key_width(width) + self.scaled(BASE_KEY_GAP)
@@ -234,20 +302,27 @@ class KeyboardOverlayApp:
     def row_width(self, row):
         return sum(self.cell_width(item[2]) for item in row)
 
-    def stop_video_background(self):
-        if self.video_after_id is not None:
-            try:
-                self.root.after_cancel(self.video_after_id)
-            except tk.TclError:
-                pass
-            self.video_after_id = None
+    def stop_backgrounds(self):
+        for after_id in (self.video_after_id, self.gif_after_id):
+            if after_id is not None:
+                try:
+                    self.root.after_cancel(after_id)
+                except tk.TclError:
+                    pass
+
+        self.video_after_id = None
+        self.gif_after_id = None
 
         if self.video_reader is not None:
             self.video_reader.stop()
             self.video_reader = None
 
+        if self.gif_reader is not None:
+            self.gif_reader.stop()
+            self.gif_reader = None
+
     def build(self):
-        self.stop_video_background()
+        self.stop_backgrounds()
 
         for child in self.root.winfo_children():
             if not isinstance(child, tk.Toplevel):
@@ -259,6 +334,8 @@ class KeyboardOverlayApp:
         self.keys = {}
         self.background_photo = None
         self.video_background_item = None
+        self.gif_background_item = None
+        self.background_error_shown = False
 
         self.header_height = self.scaled(BASE_HEADER_HEIGHT, minimum=12)
         self.key_height = self.scaled(BASE_KEY_HEIGHT, minimum=12)
@@ -328,11 +405,15 @@ class KeyboardOverlayApp:
         self.canvas.pack(fill="both", expand=True)
 
         video_path = self.settings.get("background_video", "")
+        gif_path = self.settings.get("background_gif", "")
         image_path = self.settings.get("background_image", "")
 
         if video_path and os.path.isfile(video_path):
             self.canvas.configure(bg=PANEL_COLOR)
             self.start_video_background(video_path, canvas_width, canvas_height)
+        elif gif_path and os.path.isfile(gif_path):
+            self.canvas.configure(bg=PANEL_COLOR)
+            self.start_gif_background(gif_path, canvas_width, canvas_height)
         elif image_path and os.path.isfile(image_path):
             self.canvas.configure(bg=PANEL_COLOR)
             self.set_background_image(image_path, canvas_width, canvas_height)
@@ -409,7 +490,6 @@ class KeyboardOverlayApp:
         )
 
     def start_video_background(self, path, width, height):
-        self.video_error_shown = False
         self.video_reader = VideoReader(path)
         self.video_background_item = self.canvas.create_image(
             width // 2,
@@ -424,8 +504,8 @@ class KeyboardOverlayApp:
         if self.video_reader is None:
             return
 
-        if self.video_reader.error and not self.video_error_shown:
-            self.video_error_shown = True
+        if self.video_reader.error and not self.background_error_shown:
+            self.background_error_shown = True
             messagebox.showerror(
                 "KeyTap Overlay",
                 f"Could not play this video:\n\n{self.video_reader.error}",
@@ -447,16 +527,10 @@ class KeyboardOverlayApp:
                     (frame_width, frame_height),
                     frame_data,
                 )
-
-                crop = self.settings.get("background_video_crop")
-                if crop and len(crop) == 4:
-                    left, top, right, bottom = crop
-                    left = max(0, min(frame_width - 1, int(left * frame_width)))
-                    top = max(0, min(frame_height - 1, int(top * frame_height)))
-                    right = max(left + 1, min(frame_width, int(right * frame_width)))
-                    bottom = max(top + 1, min(frame_height, int(bottom * frame_height)))
-                    frame = frame.crop((left, top, right, bottom))
-
+                frame = apply_normalized_crop(
+                    frame,
+                    self.settings.get("background_video_crop"),
+                )
                 frame = ImageOps.fit(
                     frame,
                     (width, height),
@@ -473,6 +547,67 @@ class KeyboardOverlayApp:
         self.video_after_id = self.root.after(
             30,
             lambda: self.poll_video_frames(width, height),
+        )
+
+    def start_gif_background(self, path, width, height):
+        self.gif_reader = GifReader(path)
+        self.gif_background_item = self.canvas.create_image(
+            width // 2,
+            height // 2,
+            anchor="center",
+            tags=("background",),
+        )
+        self.canvas.tag_lower("background")
+        self.poll_gif_frames(width, height)
+
+    def poll_gif_frames(self, width, height):
+        if self.gif_reader is None:
+            return
+
+        if self.gif_reader.error and not self.background_error_shown:
+            self.background_error_shown = True
+            messagebox.showerror(
+                "KeyTap Overlay",
+                f"Could not play this GIF:\n\n{self.gif_reader.error}",
+                parent=self.root,
+            )
+
+        newest = None
+        try:
+            while True:
+                newest = self.gif_reader.frames.get_nowait()
+        except queue.Empty:
+            pass
+
+        delay = 30
+        if newest is not None:
+            frame_data, frame_width, frame_height, delay = newest
+            try:
+                frame = Image.frombytes(
+                    "RGB",
+                    (frame_width, frame_height),
+                    frame_data,
+                )
+                frame = apply_normalized_crop(
+                    frame,
+                    self.settings.get("background_gif_crop"),
+                )
+                frame = ImageOps.fit(
+                    frame,
+                    (width, height),
+                    method=Image.Resampling.LANCZOS,
+                )
+                self.background_photo = ImageTk.PhotoImage(frame, master=self.root)
+                self.canvas.itemconfigure(
+                    self.gif_background_item,
+                    image=self.background_photo,
+                )
+            except (tk.TclError, ValueError):
+                pass
+
+        self.gif_after_id = self.root.after(
+            max(20, min(int(delay), 1000)),
+            lambda: self.poll_gif_frames(width, height),
         )
 
     def update_lock_indicators(self):
@@ -838,7 +973,7 @@ class KeyboardOverlayApp:
         threading.Thread(target=install, daemon=True).start()
 
     def close(self):
-        self.stop_video_background()
+        self.stop_backgrounds()
         if hasattr(self, "hook"):
             self.hook.close()
         self.root.destroy()

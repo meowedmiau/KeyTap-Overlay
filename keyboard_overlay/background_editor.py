@@ -1,4 +1,4 @@
-"""Crop editors for still-image and video keyboard backgrounds."""
+"""Crop editors for still-image, GIF, and video keyboard backgrounds."""
 
 import os
 from pathlib import Path
@@ -74,12 +74,7 @@ class _CropDialog:
         zoom_row = tk.Frame(shell, bg=BG)
         zoom_row.pack(fill="x", pady=(10, 4))
 
-        tk.Label(
-            zoom_row,
-            text="Zoom",
-            bg=BG,
-            fg=TEXT,
-        ).pack(side="left")
+        tk.Label(zoom_row, text="Zoom", bg=BG, fg=TEXT).pack(side="left")
 
         self.zoom_var = tk.DoubleVar(value=1.0)
         ttk.Scale(
@@ -140,11 +135,19 @@ class _CropDialog:
         right = round(self.center_x + half_width)
         bottom = round(self.center_y + half_height)
 
-        return (left, top, right, bottom), crop_width, crop_height
+        return (left, top, right, bottom)
+
+    def normalized_crop(self):
+        left, top, right, bottom = self.crop_box()
+        return (
+            left / self.image.width,
+            top / self.image.height,
+            right / self.image.width,
+            bottom / self.image.height,
+        )
 
     def render(self):
-        box, _, _ = self.crop_box()
-        cropped = self.image.crop(box).resize(
+        cropped = self.image.crop(self.crop_box()).resize(
             (self.view_width, self.view_height),
             Image.Resampling.LANCZOS,
         )
@@ -205,21 +208,22 @@ class _CropDialog:
                 x += key_width + gap
 
     def start_drag(self, event):
-        _, crop_width, crop_height = self.crop_box()
         self.drag_origin = (
             event.x,
             event.y,
             self.center_x,
             self.center_y,
-            crop_width,
-            crop_height,
+            self.crop_box(),
         )
 
     def drag(self, event):
         if not self.drag_origin:
             return
 
-        start_x, start_y, center_x, center_y, crop_width, crop_height = self.drag_origin
+        start_x, start_y, center_x, center_y, box = self.drag_origin
+        crop_width = box[2] - box[0]
+        crop_height = box[3] - box[1]
+
         self.center_x = center_x - (event.x - start_x) * crop_width / self.view_width
         self.center_y = center_y - (event.y - start_y) * crop_height / self.view_height
         self.render()
@@ -229,55 +233,68 @@ class _CropDialog:
         self.zoom_label.configure(text=f"{self.zoom:.1f}×")
         self.render()
 
-    def normalized_crop(self):
-        box, _, _ = self.crop_box()
-        left, top, right, bottom = box
-        return (
-            left / self.image.width,
-            top / self.image.height,
-            right / self.image.width,
-            bottom / self.image.height,
-        )
-
 
 class BackgroundCropDialog(_CropDialog):
-    """Crop a still image and save the crop to the app's background folder."""
+    """Crop a still image and save the result as a PNG."""
 
     def __init__(self, parent, image_path, aspect_ratio, on_save):
         with Image.open(image_path) as source:
             image = source.convert("RGBA")
 
-        self.source_path = image_path
+        self.on_image_save = on_save
         super().__init__(
             parent,
             image,
             aspect_ratio,
             "Fit keyboard background",
-            on_save,
+            self._save_image,
         )
 
-    def save_crop(self):
-        box, _, _ = self.crop_box()
-        crop = self.image.crop(box)
-
-        app_data = Path(
-            os.environ.get(
-                "APPDATA",
-                Path.home() / "AppData" / "Roaming",
-            )
+    def _save_image(self, _unused):
+        folder = (
+            Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+            / "KeyTap-Overlay"
+            / "backgrounds"
         )
-        folder = app_data / "KeyTap-Overlay" / "backgrounds"
         folder.mkdir(parents=True, exist_ok=True)
 
         output_path = folder / f"keyboard-background-{uuid4().hex}.png"
-        crop.save(output_path, "PNG")
-
-        self.on_save(str(output_path))
+        self.image.crop(self.crop_box()).save(output_path, "PNG")
+        self.on_image_save(str(output_path))
         self.window.destroy()
+
+    def save_crop(self):
+        self._save_image(None)
+
+
+class GifBackgroundCropDialog(_CropDialog):
+    """Preview a GIF's first frame and save a normalized crop for playback."""
+
+    def __init__(self, parent, gif_path, aspect_ratio, on_save):
+        with Image.open(gif_path) as source:
+            source.seek(0)
+            frame = source.convert("RGBA")
+
+        self.gif_path = gif_path
+        self.on_gif_save = on_save
+        super().__init__(
+            parent,
+            frame,
+            aspect_ratio,
+            "Fit keyboard GIF background",
+            self._save_gif,
+        )
+
+    def _save_gif(self, _unused):
+        self.on_gif_save(self.gif_path, self.normalized_crop())
+        self.window.destroy()
+
+    def save_crop(self):
+        self._save_gif(None)
 
 
 class VideoBackgroundCropDialog(_CropDialog):
-    """Choose and save a normalized crop rectangle for a video background."""
+    """Preview a video's first frame and save a normalized crop for playback."""
 
     def __init__(self, parent, video_path, aspect_ratio, on_save):
         self.video_path = video_path
@@ -291,14 +308,18 @@ class VideoBackgroundCropDialog(_CropDialog):
             reader.close()
 
         frame = Image.frombytes("RGB", (width, height), frame_data).convert("RGBA")
+        self.on_video_save = on_save
         super().__init__(
             parent,
             frame,
             aspect_ratio,
             "Fit keyboard video background",
-            on_save,
+            self._save_video,
         )
 
-    def save_crop(self):
-        self.on_save(self.video_path, self.normalized_crop())
+    def _save_video(self, _unused):
+        self.on_video_save(self.video_path, self.normalized_crop())
         self.window.destroy()
+
+    def save_crop(self):
+        self._save_video(None)

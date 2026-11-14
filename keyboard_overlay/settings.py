@@ -8,7 +8,11 @@ import tkinter as tk
 from tkinter import colorchooser, filedialog, font as tkfont, messagebox, ttk
 from uuid import uuid4
 
-from .background_editor import BackgroundCropDialog, VideoBackgroundCropDialog
+from .background_editor import (
+    BackgroundCropDialog,
+    GifBackgroundCropDialog,
+    VideoBackgroundCropDialog,
+)
 from PIL import Image
 
 
@@ -22,6 +26,8 @@ DEFAULTS = {
     "font_size": 9,
     "lock_key": "Shift",
     "background_image": "",
+    "background_gif": "",
+    "background_gif_crop": None,
     "background_video": "",
     "background_video_crop": None,
     "keyboard_scale": 100,
@@ -47,12 +53,17 @@ LOCK_KEY_CHOICES = (
 )
 
 IMAGE_FILETYPES = [
-    ("Images", "*.png *.jpg *.jpeg *.bmp *.gif *.webp"),
+    ("Images", "*.png *.jpg *.jpeg *.bmp *.webp"),
     ("All files", "*.*"),
 ]
 
 VIDEO_FILETYPES = [
     ("Videos", "*.mp4 *.mkv *.mov *.avi *.webm *.m4v"),
+    ("All files", "*.*"),
+]
+
+GIF_FILETYPES = [
+    ("GIF images", "*.gif"),
     ("All files", "*.*"),
 ]
 
@@ -78,10 +89,15 @@ def load_settings():
         loaded = json.loads(settings_path().read_text(encoding="utf-8"))
         settings = {**DEFAULTS, **loaded}
         settings["keyboard_scale"] = min(
-            150, max(50, int(settings.get("keyboard_scale", 100)))
+            150,
+            max(50, int(settings.get("keyboard_scale", 100))),
         )
 
+        # Keep only one background active if an older settings file has more.
         if settings.get("background_video"):
+            settings["background_image"] = ""
+            settings["background_gif"] = ""
+        elif settings.get("background_gif"):
             settings["background_image"] = ""
 
         return settings
@@ -109,8 +125,7 @@ def copy_background_image(source_path):
     folder = settings_path().parent / "backgrounds"
     folder.mkdir(parents=True, exist_ok=True)
 
-    suffix = source.suffix.lower()
-    target = folder / f"keyboard-background-{uuid4().hex}{suffix}"
+    target = folder / f"keyboard-background-{uuid4().hex}{source.suffix.lower()}"
     shutil.copy2(source, target)
     return str(target)
 
@@ -403,13 +418,14 @@ class SettingsDialog:
         self.card(
             shell,
             "BACKGROUND",
-            "Choose an image or a looping video and position its crop.",
+            "Choose one still image, GIF, or looping video.",
         )
         background_row = tk.Frame(self.last_card, bg=CARD)
         background_row.pack(fill="x", padx=15, pady=(0, 9))
 
         active_background = (
             self.draft.get("background_video")
+            or self.draft.get("background_gif")
             or self.draft.get("background_image")
             or ""
         )
@@ -433,6 +449,18 @@ class SettingsDialog:
             pady=3,
             command=self.choose_background,
         ).pack(side="left", padx=(7, 0))
+
+        tk.Button(
+            background_row,
+            text="Choose GIF",
+            relief="flat",
+            bg="#edf3f8",
+            fg=TEXT,
+            activebackground="#dfeaf3",
+            padx=9,
+            pady=3,
+            command=self.choose_gif,
+        ).pack(side="left", padx=(5, 0))
 
         tk.Button(
             background_row,
@@ -618,17 +646,33 @@ class SettingsDialog:
                 parent=self.window,
             )
 
-    def set_background_image(self, path):
-        self.draft["background_image"] = path
-        self.draft["background_video"] = ""
-        self.draft["background_video_crop"] = None
-        self.background_label.configure(text=Path(path).name, fg=TEXT)
-        self.preview()
+    def choose_gif(self):
+        selected = filedialog.askopenfilename(
+            parent=self.window,
+            title="Choose looping keyboard GIF background",
+            filetypes=GIF_FILETYPES,
+        )
+        if not selected:
+            return
+
+        try:
+            GifBackgroundCropDialog(
+                self.window,
+                selected,
+                self.background_aspect,
+                self.set_background_gif,
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "KeyTap Overlay",
+                f"Could not open that GIF:\n{exc}",
+                parent=self.window,
+            )
 
     def choose_video(self):
         selected = filedialog.askopenfilename(
             parent=self.window,
-            title="Choose looping keyboard background video",
+            title="Choose looping keyboard video background",
             filetypes=VIDEO_FILETYPES,
         )
         if not selected:
@@ -648,12 +692,40 @@ class SettingsDialog:
                 parent=self.window,
             )
 
+    def set_background_image(self, path):
+        self.draft["background_image"] = path
+        self.draft["background_gif"] = ""
+        self.draft["background_gif_crop"] = None
+        self.draft["background_video"] = ""
+        self.draft["background_video_crop"] = None
+        self.background_label.configure(text=Path(path).name, fg=TEXT)
+        self.preview()
+
+    def set_background_gif(self, source_path, crop):
+        try:
+            saved_path = copy_background_image(source_path)
+            self.draft["background_gif"] = saved_path
+            self.draft["background_gif_crop"] = list(crop)
+            self.draft["background_image"] = ""
+            self.draft["background_video"] = ""
+            self.draft["background_video_crop"] = None
+            self.background_label.configure(text=Path(saved_path).name, fg=TEXT)
+            self.preview()
+        except OSError as exc:
+            messagebox.showerror(
+                "KeyTap Overlay",
+                f"Could not copy that GIF:\n{exc}",
+                parent=self.window,
+            )
+
     def set_background_video(self, source_path, crop):
         try:
             saved_path = copy_background_image(source_path)
             self.draft["background_video"] = saved_path
             self.draft["background_video_crop"] = list(crop)
             self.draft["background_image"] = ""
+            self.draft["background_gif"] = ""
+            self.draft["background_gif_crop"] = None
             self.background_label.configure(text=Path(saved_path).name, fg=TEXT)
             self.preview()
         except OSError as exc:
@@ -665,6 +737,8 @@ class SettingsDialog:
 
     def remove_background(self):
         self.draft["background_image"] = ""
+        self.draft["background_gif"] = ""
+        self.draft["background_gif_crop"] = None
         self.draft["background_video"] = ""
         self.draft["background_video_crop"] = None
         self.background_label.configure(text="None", fg=MUTED)
