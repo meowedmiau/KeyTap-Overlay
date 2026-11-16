@@ -24,6 +24,7 @@ VK_F1 = 0x70
 
 GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x20
+WS_EX_NOACTIVATE = 0x08000000
 SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 SWP_NOZORDER = 0x0004
@@ -611,8 +612,12 @@ class KeyboardOverlayApp:
 
     def set_mouse_passthrough(self):
         style = self.user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
-        if self.locked: style |= WS_EX_TRANSPARENT
-        else: style &= ~WS_EX_TRANSPARENT
+        if self.locked: 
+            style |= WS_EX_TRANSPARENT
+            style |= WS_EX_NOACTIVATE
+        else: 
+            style &= ~WS_EX_TRANSPARENT
+            style &= ~WS_EX_NOACTIVATE
         self.user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, style)
         self.user32.SetWindowPos(self.hwnd, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
 

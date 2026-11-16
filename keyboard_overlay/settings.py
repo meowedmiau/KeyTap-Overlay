@@ -16,15 +16,21 @@ DEFAULTS = {
     "background_gif_crop": None, "background_video": "", "background_video_crop": None,
     "mouse_background_image": "", "mouse_background_gif": "", "mouse_background_gif_crop": None,
     "mouse_background_video": "", "mouse_background_video_crop": None,
-    "keyboard_scale": 100, "layout_name": "", "compact": False, "view_mode": "keyboard",
+    "keyboard_scale": 100, "layout_name": "", "compact": False, "view_mode": "keyboard", "theme": "light",
 }
 
-BG = "#f3f6fa"
-CARD = "#ffffff"
-TEXT = "#172033"
-MUTED = "#69758a"
-ACCENT = "#2589d8"
-LINE = "#e5eaf1"
+THEMES = {
+    "light": {
+        "BG": "#f3f6fa", "CARD": "#ffffff", "TEXT": "#172033", "MUTED": "#69758a",
+        "ACCENT": "#2589d8", "LINE": "#e5eaf1", "PREVIEW_BG": "#eaf2f9",
+        "BTN_BG": "#edf3f8", "BTN_ACTIVE": "#dfeaf3", "BTN_FG": "#172033"
+    },
+    "dark": {
+        "BG": "#1e1e1e", "CARD": "#252526", "TEXT": "#cccccc", "MUTED": "#858585",
+        "ACCENT": "#007acc", "LINE": "#3e3e42", "PREVIEW_BG": "#2d2d30",
+        "BTN_BG": "#3e3e42", "BTN_ACTIVE": "#4e4e52", "BTN_FG": "#ffffff"
+    }
+}
 
 LOCK_KEY_CHOICES = ("Shift", "Ctrl", "Alt", "Caps Lock", "Scroll Lock", "Pause", *(f"F{i}" for i in range(1, 13)))
 IMAGE_FILETYPES = [("Images", "*.png *.jpg *.jpeg *.bmp *.webp"), ("All files", "*.*")]
@@ -62,6 +68,8 @@ def load_settings():
             
         if settings.get("view_mode") not in ["keyboard", "mouse", "both"]:
             settings["view_mode"] = "keyboard"
+        if settings.get("theme") not in ["light", "dark"]:
+            settings["theme"] = "light"
 
         return settings
     except (OSError, ValueError, TypeError):
@@ -71,11 +79,11 @@ def save_settings(settings):
     settings_path().write_text(json.dumps(settings, indent=2), encoding="utf-8")
 
 def readable_on(color):
-    if not color: return TEXT
+    if not color: return "#ffffff"
     try:
         rgb = tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
-        return TEXT if sum(rgb) > 390 else "#ffffff"
-    except (ValueError, TypeError): return TEXT
+        return "#172033" if sum(rgb) > 390 else "#ffffff"
+    except (ValueError, TypeError): return "#ffffff"
 
 def copy_background_image(source_path, prefix="keyboard-background"):
     source = Path(source_path)
@@ -99,30 +107,49 @@ class SettingsDialog:
         self.draft = {**DEFAULTS, **settings}
         self.on_preview = on_preview
         self.background_aspect = background_aspect
+        self.theme = THEMES[self.draft["theme"]]
 
         self.window = tk.Toplevel(parent)
         self.window.title("KeyTap Overlay · Settings")
         self.window.transient(parent)
         self.window.attributes("-topmost", True)
         self.window.resizable(True, True)
-        self.window.configure(bg=BG)
+        self.window.configure(bg=self.theme["BG"])
         self.window.protocol("WM_DELETE_WINDOW", self.cancel)
 
         style = ttk.Style(self.window)
         style.theme_use("clam")
-        style.configure("Overlay.Horizontal.TScale", background=CARD, troughcolor="#dce5ef", sliderlength=18, sliderthickness=22)
-        style.configure("Overlay.TCombobox", padding=6, fieldbackground="#ffffff")
-        style.configure("Overlay.TButton", padding=(12, 7), font=("Segoe UI", 9))
-        style.configure("Overlay.Primary.TButton", padding=(14, 8), foreground="#ffffff", background=ACCENT, font=("Segoe UI", 9, "bold"))
-        style.map("Overlay.Primary.TButton", background=[("active", "#1572bd")])
+        style.configure("Overlay.Horizontal.TScale", background=self.theme["CARD"], troughcolor=self.theme["LINE"], sliderlength=18, sliderthickness=22)
+        
+        style.configure("Overlay.TCombobox", padding=6, fieldbackground=self.theme["CARD"], background=self.theme["CARD"], foreground=self.theme["TEXT"], arrowcolor=self.theme["TEXT"])
+        style.map("Overlay.TCombobox",
+                  fieldbackground=[("readonly", self.theme["CARD"])],
+                  foreground=[("readonly", self.theme["TEXT"])],
+                  background=[("readonly", self.theme["CARD"])],
+                  selectbackground=[("readonly", self.theme["CARD"])],
+                  selectforeground=[("readonly", self.theme["TEXT"])])
+                  
+        self.window.option_add("*TCombobox*Listbox.background", self.theme["CARD"])
+        self.window.option_add("*TCombobox*Listbox.foreground", self.theme["TEXT"])
+        self.window.option_add("*TCombobox*Listbox.selectBackground", self.theme["ACCENT"])
+        self.window.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+        self.window.option_add("*TCombobox*Listbox.font", ("Segoe UI", 9))
 
-        outer = tk.Frame(self.window, bg=BG)
+        style.configure("Overlay.TButton", padding=(12, 7), font=("Segoe UI", 9), foreground=self.theme["TEXT"], background=self.theme["BTN_BG"], bordercolor=self.theme["LINE"])
+        style.map("Overlay.TButton", background=[("active", self.theme["BTN_ACTIVE"])])
+        
+        style.configure("Overlay.Primary.TButton", padding=(14, 8), foreground="#ffffff", background=self.theme["ACCENT"], font=("Segoe UI", 9, "bold"), bordercolor=self.theme["ACCENT"])
+        style.map("Overlay.Primary.TButton", background=[("active", "#1572bd")])
+        
+        style.configure("Vertical.TScrollbar", background=self.theme["CARD"], troughcolor=self.theme["BG"], bordercolor=self.theme["BG"], arrowcolor=self.theme["TEXT"], darkcolor=self.theme["CARD"], lightcolor=self.theme["CARD"])
+
+        outer = tk.Frame(self.window, bg=self.theme["BG"])
         outer.pack(fill="both", expand=True)
 
-        content = tk.Frame(outer, bg=BG)
-        canvas = tk.Canvas(content, bg=BG, bd=0, highlightthickness=0)
+        content = tk.Frame(outer, bg=self.theme["BG"])
+        canvas = tk.Canvas(content, bg=self.theme["BG"], bd=0, highlightthickness=0)
         scrollbar = ttk.Scrollbar(content, orient="vertical", command=canvas.yview)
-        shell = tk.Frame(canvas, bg=BG, padx=18, pady=12)
+        shell = tk.Frame(canvas, bg=self.theme["BG"], padx=18, pady=12)
 
         shell_window = canvas.create_window((0, 0), window=shell, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
@@ -138,18 +165,22 @@ class SettingsDialog:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        def on_mousewheel(event): canvas.yview_scroll(int(-event.delta / 120), "units")
+        def on_mousewheel(event):
+            if event.widget.winfo_class() in ("Listbox", "TCombobox", "TScrollbar"):
+                return
+            canvas.yview_scroll(int(-event.delta / 120), "units")
+
         canvas.bind_all("<MouseWheel>", on_mousewheel)
         self.window.bind("<Destroy>", lambda _event: canvas.unbind_all("<MouseWheel>"), add="+")
 
-        tk.Label(shell, text="Make it yours", bg=BG, fg=TEXT, font=("Segoe UI", 20, "bold")).pack(anchor="w")
-        tk.Label(shell, text="Tune the overlay's look and feel.", bg=BG, fg=MUTED, font=("Segoe UI", 10)).pack(anchor="w", pady=(3, 12))
+        tk.Label(shell, text="Make it yours", bg=self.theme["BG"], fg=self.theme["TEXT"], font=("Segoe UI", 20, "bold")).pack(anchor="w")
+        tk.Label(shell, text="Tune the overlay's look and feel.", bg=self.theme["BG"], fg=self.theme["MUTED"], font=("Segoe UI", 10)).pack(anchor="w", pady=(3, 12))
 
-        self.preview_card = tk.Frame(shell, bg="#eaf2f9", padx=13, pady=9)
+        self.preview_card = tk.Frame(shell, bg=self.theme["PREVIEW_BG"], padx=13, pady=9)
         self.preview_card.pack(fill="x", pady=(0, 10))
-        tk.Label(self.preview_card, text="LIVE PREVIEW", bg="#eaf2f9", fg=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        tk.Label(self.preview_card, text="LIVE PREVIEW", bg=self.theme["PREVIEW_BG"], fg=self.theme["MUTED"], font=("Segoe UI", 8, "bold")).pack(anchor="w")
         
-        self.sample = tk.Frame(self.preview_card, bg="#eaf2f9")
+        self.sample = tk.Frame(self.preview_card, bg=self.theme["PREVIEW_BG"])
         self.sample.pack(anchor="center", pady=(5, 0))
         self.preview_keys = []
         for title in ("Q", "W", "E", "R", "T", "Y"):
@@ -158,8 +189,16 @@ class SettingsDialog:
             self.preview_keys.append(key)
         self.preview_keys[2].configure(bg=self.draft["pressed_color"], fg=readable_on(self.draft["pressed_color"]))
 
+        self.card(shell, "THEME", "Switch between light and dark mode.")
+        theme_row = tk.Frame(self.last_card, bg=self.theme["CARD"])
+        theme_row.pack(fill="x", padx=15, pady=(0, 9))
+        self.theme_var = tk.StringVar(value=self.draft.get("theme", "light"))
+        theme_box = ttk.Combobox(theme_row, textvariable=self.theme_var, values=["light", "dark"], state="readonly", style="Overlay.TCombobox", width=24)
+        theme_box.pack(side="left", fill="x", expand=True)
+        theme_box.bind("<<ComboboxSelected>>", self.update_theme)
+
         self.card(shell, "VIEW MODE", "Choose whether to show the keyboard, the mouse, or both.")
-        view_row = tk.Frame(self.last_card, bg=CARD)
+        view_row = tk.Frame(self.last_card, bg=self.theme["CARD"])
         view_row.pack(fill="x", padx=15, pady=(0, 9))
         self.view_var = tk.StringVar(value=self.draft.get("view_mode", "keyboard"))
         self.view_box = ttk.Combobox(view_row, textvariable=self.view_var, values=["keyboard", "mouse", "both"], state="readonly", style="Overlay.TCombobox", width=24)
@@ -167,42 +206,42 @@ class SettingsDialog:
         self.view_box.bind("<<ComboboxSelected>>", self.update_view_mode)
 
         self.card(shell, "OVERLAY SIZE", "Scale the complete keyboard and mouse evenly, from 50% to 150%.")
-        scale_row = tk.Frame(self.last_card, bg=CARD)
+        scale_row = tk.Frame(self.last_card, bg=self.theme["CARD"])
         scale_row.pack(fill="x", padx=15, pady=(0, 9))
         self.keyboard_scale_var = tk.DoubleVar(value=self.draft["keyboard_scale"])
         ttk.Scale(scale_row, from_=50, to=150, variable=self.keyboard_scale_var, command=self.update_keyboard_scale, style="Overlay.Horizontal.TScale").pack(side="left", fill="x", expand=True)
-        self.keyboard_scale_label = tk.Label(scale_row, text=f"{self.draft['keyboard_scale']}%", width=6, bg=CARD, fg=TEXT, font=("Segoe UI", 9, "bold"))
+        self.keyboard_scale_label = tk.Label(scale_row, text=f"{self.draft['keyboard_scale']}%", width=6, bg=self.theme["CARD"], fg=self.theme["TEXT"], font=("Segoe UI", 9, "bold"))
         self.keyboard_scale_label.pack(side="right", padx=(10, 0))
 
         self.card(shell, "TRANSPARENCY", "Set the overlay opacity from invisible to fully visible.")
-        opacity_row = tk.Frame(self.last_card, bg=CARD)
+        opacity_row = tk.Frame(self.last_card, bg=self.theme["CARD"])
         opacity_row.pack(fill="x", padx=15, pady=(0, 9))
         self.opacity_var = tk.DoubleVar(value=self.draft["opacity"])
         ttk.Scale(opacity_row, from_=0, to=100, variable=self.opacity_var, command=self.update_opacity, style="Overlay.Horizontal.TScale").pack(side="left", fill="x", expand=True)
-        self.opacity_label = tk.Label(opacity_row, text=f"{self.draft['opacity']}%", width=5, bg=CARD, fg=TEXT, font=("Segoe UI", 9, "bold"))
+        self.opacity_label = tk.Label(opacity_row, text=f"{self.draft['opacity']}%", width=5, bg=self.theme["CARD"], fg=self.theme["TEXT"], font=("Segoe UI", 9, "bold"))
         self.opacity_label.pack(side="right", padx=(10, 0))
 
         self.card(shell, "KEY COLORS", "Choose colors for labels, outlines, and presses.")
-        color_grid = tk.Frame(self.last_card, bg=CARD)
+        color_grid = tk.Frame(self.last_card, bg=self.theme["CARD"])
         color_grid.pack(fill="x", padx=14, pady=(0, 10))
 
         for index, (title, setting, description) in enumerate(self.COLORS):
-            cell = tk.Frame(color_grid, bg=CARD, padx=3, pady=3)
+            cell = tk.Frame(color_grid, bg=self.theme["CARD"], padx=3, pady=3)
             cell.grid(row=index // 2, column=index % 2, sticky="ew", padx=3)
             color_grid.grid_columnconfigure(index % 2, weight=1)
-            tk.Label(cell, text=title, bg=CARD, fg=TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w")
-            line = tk.Frame(cell, bg=CARD)
+            tk.Label(cell, text=title, bg=self.theme["CARD"], fg=self.theme["TEXT"], font=("Segoe UI", 9, "bold")).pack(anchor="w")
+            line = tk.Frame(cell, bg=self.theme["CARD"])
             line.pack(fill="x", pady=(4, 0))
             swatch = tk.Label(line, width=3, height=1, relief="solid", bd=1)
             swatch.pack(side="left")
-            tk.Button(line, text="Choose", relief="flat", bg="#edf3f8", fg=TEXT, activebackground="#dfeaf3", padx=9, pady=3, command=lambda key=setting: self.choose_color(key)).pack(side="left", padx=(7, 0))
+            tk.Button(line, text="Choose", relief="flat", bg=self.theme["BTN_BG"], fg=self.theme["BTN_FG"], activebackground=self.theme["BTN_ACTIVE"], padx=9, pady=3, command=lambda key=setting: self.choose_color(key)).pack(side="left", padx=(7, 0))
             if setting == "key_fill":
-                tk.Button(line, text="Clear", relief="flat", bg=CARD, fg=MUTED, command=self.clear_fill).pack(side="left", padx=3)
-            tk.Label(cell, text=description, bg=CARD, fg=MUTED, wraplength=200, justify="left", font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+                tk.Button(line, text="Clear", relief="flat", bg=self.theme["CARD"], fg=self.theme["MUTED"], command=self.clear_fill).pack(side="left", padx=3)
+            tk.Label(cell, text=description, bg=self.theme["CARD"], fg=self.theme["MUTED"], wraplength=200, justify="left", font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
             setattr(self, f"swatch_{setting}", swatch)
 
         self.card(shell, "TYPE", "Pick any font installed on this Windows computer.")
-        type_row = tk.Frame(self.last_card, bg=CARD)
+        type_row = tk.Frame(self.last_card, bg=self.theme["CARD"])
         type_row.pack(fill="x", padx=15, pady=(0, 9))
         families = sorted(set(tkfont.families(self.window)), key=str.casefold) or ["Segoe UI", "Arial", "Consolas"]
         self.font_var = tk.StringVar(value=self.draft["font_family"])
@@ -211,39 +250,45 @@ class SettingsDialog:
         self.font_box.bind("<<ComboboxSelected>>", self.update_font)
         self.size_var = tk.DoubleVar(value=self.draft["font_size"])
         ttk.Scale(type_row, from_=7, to=18, variable=self.size_var, command=self.update_font_size, style="Overlay.Horizontal.TScale").pack(side="left", fill="x", expand=True, padx=(12, 0))
-        self.size_label = tk.Label(type_row, text=f"{self.draft['font_size']} pt", width=6, bg=CARD, fg=TEXT, font=("Segoe UI", 9))
+        self.size_label = tk.Label(type_row, text=f"{self.draft['font_size']} pt", width=6, bg=self.theme["CARD"], fg=self.theme["TEXT"], font=("Segoe UI", 9))
         self.size_label.pack(side="right", padx=(5, 0))
 
         self.card(shell, "KEYBOARD BACKGROUND", "Choose one still image, GIF, or looping video.")
-        bg_row = tk.Frame(self.last_card, bg=CARD)
-        bg_row.pack(fill="x", padx=15, pady=(0, 9))
+        kb_bg_frame = tk.Frame(self.last_card, bg=self.theme["CARD"])
+        kb_bg_frame.pack(fill="x", padx=15, pady=(0, 9))
         active_kb_bg = self.draft.get("background_video") or self.draft.get("background_gif") or self.draft.get("background_image") or ""
-        self.background_label = tk.Label(bg_row, text=Path(active_kb_bg).name if active_kb_bg else "None", bg=CARD, fg=MUTED, anchor="w")
-        self.background_label.pack(side="left", fill="x", expand=True)
-        tk.Button(bg_row, text="Image", relief="flat", bg="#edf3f8", fg=TEXT, command=self.choose_background).pack(side="left", padx=2)
-        tk.Button(bg_row, text="GIF", relief="flat", bg="#edf3f8", fg=TEXT, command=self.choose_gif).pack(side="left", padx=2)
-        tk.Button(bg_row, text="Video", relief="flat", bg="#edf3f8", fg=TEXT, command=self.choose_video).pack(side="left", padx=2)
-        tk.Button(bg_row, text="Remove", relief="flat", bg=CARD, fg=MUTED, command=self.remove_background).pack(side="left", padx=2)
+        self.background_label = tk.Label(kb_bg_frame, text=Path(active_kb_bg).name if active_kb_bg else "None", bg=self.theme["CARD"], fg=self.theme["MUTED"], anchor="w")
+        self.background_label.pack(fill="x", pady=(0, 5))
+        
+        kb_btn_row = tk.Frame(kb_bg_frame, bg=self.theme["CARD"])
+        kb_btn_row.pack(fill="x")
+        tk.Button(kb_btn_row, text="Image", relief="flat", bg=self.theme["BTN_BG"], fg=self.theme["BTN_FG"], command=self.choose_background).pack(side="left", padx=(0, 5))
+        tk.Button(kb_btn_row, text="GIF", relief="flat", bg=self.theme["BTN_BG"], fg=self.theme["BTN_FG"], command=self.choose_gif).pack(side="left", padx=5)
+        tk.Button(kb_btn_row, text="Video", relief="flat", bg=self.theme["BTN_BG"], fg=self.theme["BTN_FG"], command=self.choose_video).pack(side="left", padx=5)
+        tk.Button(kb_btn_row, text="Remove", relief="flat", bg=self.theme["CARD"], fg=self.theme["MUTED"], command=self.remove_background).pack(side="left", padx=5)
 
         self.card(shell, "MOUSE BACKGROUND", "Customize the mouse background individually.")
-        mouse_bg_row = tk.Frame(self.last_card, bg=CARD)
-        mouse_bg_row.pack(fill="x", padx=15, pady=(0, 9))
+        mouse_bg_frame = tk.Frame(self.last_card, bg=self.theme["CARD"])
+        mouse_bg_frame.pack(fill="x", padx=15, pady=(0, 9))
         active_mouse_bg = self.draft.get("mouse_background_video") or self.draft.get("mouse_background_gif") or self.draft.get("mouse_background_image") or ""
-        self.mouse_bg_label = tk.Label(mouse_bg_row, text=Path(active_mouse_bg).name if active_mouse_bg else "None", bg=CARD, fg=MUTED, anchor="w")
-        self.mouse_bg_label.pack(side="left", fill="x", expand=True)
-        tk.Button(mouse_bg_row, text="Image", relief="flat", bg="#edf3f8", fg=TEXT, command=self.choose_mouse_background).pack(side="left", padx=2)
-        tk.Button(mouse_bg_row, text="GIF", relief="flat", bg="#edf3f8", fg=TEXT, command=self.choose_mouse_gif).pack(side="left", padx=2)
-        tk.Button(mouse_bg_row, text="Video", relief="flat", bg="#edf3f8", fg=TEXT, command=self.choose_mouse_video).pack(side="left", padx=2)
-        tk.Button(mouse_bg_row, text="Remove", relief="flat", bg=CARD, fg=MUTED, command=self.remove_mouse_background).pack(side="left", padx=2)
+        self.mouse_bg_label = tk.Label(mouse_bg_frame, text=Path(active_mouse_bg).name if active_mouse_bg else "None", bg=self.theme["CARD"], fg=self.theme["MUTED"], anchor="w")
+        self.mouse_bg_label.pack(fill="x", pady=(0, 5))
+        
+        mouse_btn_row = tk.Frame(mouse_bg_frame, bg=self.theme["CARD"])
+        mouse_btn_row.pack(fill="x")
+        tk.Button(mouse_btn_row, text="Image", relief="flat", bg=self.theme["BTN_BG"], fg=self.theme["BTN_FG"], command=self.choose_mouse_background).pack(side="left", padx=(0, 5))
+        tk.Button(mouse_btn_row, text="GIF", relief="flat", bg=self.theme["BTN_BG"], fg=self.theme["BTN_FG"], command=self.choose_mouse_gif).pack(side="left", padx=5)
+        tk.Button(mouse_btn_row, text="Video", relief="flat", bg=self.theme["BTN_BG"], fg=self.theme["BTN_FG"], command=self.choose_mouse_video).pack(side="left", padx=5)
+        tk.Button(mouse_btn_row, text="Remove", relief="flat", bg=self.theme["CARD"], fg=self.theme["MUTED"], command=self.remove_mouse_background).pack(side="left", padx=5)
 
         self.card(shell, "OVERLAY LOCK", "Choose the key that toggles click-through.")
-        lock_row = tk.Frame(self.last_card, bg=CARD)
+        lock_row = tk.Frame(self.last_card, bg=self.theme["CARD"])
         lock_row.pack(fill="x", padx=15, pady=(0, 9))
         self.lock_var = tk.StringVar(value=self.draft.get("lock_key", "Shift"))
         self.lock_box = ttk.Combobox(lock_row, textvariable=self.lock_var, values=LOCK_KEY_CHOICES, state="readonly", style="Overlay.TCombobox", width=24)
         self.lock_box.pack(side="left", fill="x", expand=True)
 
-        buttons = tk.Frame(outer, bg=BG, padx=18, pady=10)
+        buttons = tk.Frame(outer, bg=self.theme["BG"], padx=18, pady=10)
         buttons.pack(fill="x", side="bottom")
         ttk.Button(buttons, text="Cancel", style="Overlay.TButton", command=self.cancel).pack(side="right")
         ttk.Button(buttons, text="Save settings", style="Overlay.Primary.TButton", command=self.save).pack(side="right", padx=(0, 8))
@@ -252,20 +297,20 @@ class SettingsDialog:
         self.window.update_idletasks()
         screen_height = self.window.winfo_screenheight()
         window_height = min(self.window.winfo_reqheight(), max(400, screen_height - 100))
-        window_width = min(max(500, self.window.winfo_reqwidth() + 20), self.window.winfo_screenwidth() - 40)
+        window_width = min(max(520, self.window.winfo_reqwidth() + 20), self.window.winfo_screenwidth() - 40)
         self.window.geometry(f"{window_width}x{window_height}")
-        self.window.minsize(460, min(480, window_height))
+        self.window.minsize(480, min(480, window_height))
         self.window.grab_set()
 
     def card(self, parent, heading, detail):
-        card = tk.Frame(parent, bg=CARD, highlightbackground=LINE, highlightthickness=1)
+        card = tk.Frame(parent, bg=self.theme["CARD"], highlightbackground=self.theme["LINE"], highlightthickness=1)
         card.pack(fill="x", pady=(0, 7))
-        tk.Label(card, text=heading, bg=CARD, fg=TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=15, pady=(8, 2))
-        tk.Label(card, text=detail, bg=CARD, fg=MUTED, font=("Segoe UI", 8)).pack(anchor="w", padx=15, pady=(0, 7))
+        tk.Label(card, text=heading, bg=self.theme["CARD"], fg=self.theme["TEXT"], font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=15, pady=(8, 2))
+        tk.Label(card, text=detail, bg=self.theme["CARD"], fg=self.theme["MUTED"], font=("Segoe UI", 8)).pack(anchor="w", padx=15, pady=(0, 7))
         self.last_card = card
 
     def update_sample(self):
-        fill = self.draft["key_fill"] or "#eaf2f9"
+        fill = self.draft["key_fill"] or self.theme["PREVIEW_BG"]
         for index, key in enumerate(self.preview_keys):
             pressed = index == 2
             key.configure(
@@ -277,11 +322,17 @@ class SettingsDialog:
             )
         for _, setting, _ in self.COLORS:
             swatch = getattr(self, f"swatch_{setting}")
-            swatch.configure(bg=self.draft.get(setting) or "#eaf2f9", highlightbackground=LINE)
+            swatch.configure(bg=self.draft.get(setting) or self.theme["PREVIEW_BG"], highlightbackground=self.theme["LINE"])
 
     def preview(self):
         self.update_sample()
         self.on_preview(dict(self.draft))
+
+    def update_theme(self, _event=None):
+        self.draft["theme"] = self.theme_var.get()
+        save_settings(self.draft)
+        self.window.destroy()
+        SettingsDialog(self.parent, self.draft, self.on_preview, self.background_aspect)
 
     def update_view_mode(self, _event=None):
         self.draft["view_mode"] = self.view_var.get()
@@ -334,7 +385,7 @@ class SettingsDialog:
         self.draft["background_image"] = path
         self.draft["background_gif"] = ""; self.draft["background_gif_crop"] = None
         self.draft["background_video"] = ""; self.draft["background_video_crop"] = None
-        self.background_label.configure(text=Path(path).name, fg=TEXT)
+        self.background_label.configure(text=Path(path).name, fg=self.theme["TEXT"])
         self.preview()
 
     def set_background_gif(self, source_path, crop):
@@ -343,7 +394,7 @@ class SettingsDialog:
             self.draft["background_gif"] = saved_path
             self.draft["background_gif_crop"] = list(crop)
             self.draft["background_image"] = ""; self.draft["background_video"] = ""; self.draft["background_video_crop"] = None
-            self.background_label.configure(text=Path(saved_path).name, fg=TEXT)
+            self.background_label.configure(text=Path(saved_path).name, fg=self.theme["TEXT"])
             self.preview()
         except OSError as exc: messagebox.showerror("KeyTap Overlay", f"Could not copy that GIF:\n{exc}", parent=self.window)
 
@@ -353,14 +404,14 @@ class SettingsDialog:
             self.draft["background_video"] = saved_path
             self.draft["background_video_crop"] = list(crop)
             self.draft["background_image"] = ""; self.draft["background_gif"] = ""; self.draft["background_gif_crop"] = None
-            self.background_label.configure(text=Path(saved_path).name, fg=TEXT)
+            self.background_label.configure(text=Path(saved_path).name, fg=self.theme["TEXT"])
             self.preview()
         except OSError as exc: messagebox.showerror("KeyTap Overlay", f"Could not copy that video:\n{exc}", parent=self.window)
 
     def remove_background(self):
         self.draft["background_image"] = ""; self.draft["background_gif"] = ""; self.draft["background_gif_crop"] = None
         self.draft["background_video"] = ""; self.draft["background_video_crop"] = None
-        self.background_label.configure(text="None", fg=MUTED)
+        self.background_label.configure(text="None", fg=self.theme["MUTED"])
         self.preview()
 
     def choose_mouse_background(self):
@@ -385,7 +436,7 @@ class SettingsDialog:
         self.draft["mouse_background_image"] = path
         self.draft["mouse_background_gif"] = ""; self.draft["mouse_background_gif_crop"] = None
         self.draft["mouse_background_video"] = ""; self.draft["mouse_background_video_crop"] = None
-        self.mouse_bg_label.configure(text=Path(path).name, fg=TEXT)
+        self.mouse_bg_label.configure(text=Path(path).name, fg=self.theme["TEXT"])
         self.preview()
 
     def set_mouse_background_gif(self, source_path, crop):
@@ -394,7 +445,7 @@ class SettingsDialog:
             self.draft["mouse_background_gif"] = saved_path
             self.draft["mouse_background_gif_crop"] = list(crop)
             self.draft["mouse_background_image"] = ""; self.draft["mouse_background_video"] = ""; self.draft["mouse_background_video_crop"] = None
-            self.mouse_bg_label.configure(text=Path(saved_path).name, fg=TEXT)
+            self.mouse_bg_label.configure(text=Path(saved_path).name, fg=self.theme["TEXT"])
             self.preview()
         except OSError as exc: messagebox.showerror("KeyTap Overlay", f"Could not copy that GIF:\n{exc}", parent=self.window)
 
@@ -404,14 +455,14 @@ class SettingsDialog:
             self.draft["mouse_background_video"] = saved_path
             self.draft["mouse_background_video_crop"] = list(crop)
             self.draft["mouse_background_image"] = ""; self.draft["mouse_background_gif"] = ""; self.draft["mouse_background_gif_crop"] = None
-            self.mouse_bg_label.configure(text=Path(saved_path).name, fg=TEXT)
+            self.mouse_bg_label.configure(text=Path(saved_path).name, fg=self.theme["TEXT"])
             self.preview()
         except OSError as exc: messagebox.showerror("KeyTap Overlay", f"Could not copy that video:\n{exc}", parent=self.window)
 
     def remove_mouse_background(self):
         self.draft["mouse_background_image"] = ""; self.draft["mouse_background_gif"] = ""; self.draft["mouse_background_gif_crop"] = None
         self.draft["mouse_background_video"] = ""; self.draft["mouse_background_video_crop"] = None
-        self.mouse_bg_label.configure(text="None", fg=MUTED)
+        self.mouse_bg_label.configure(text="None", fg=self.theme["MUTED"])
         self.preview()
 
     def clear_fill(self):
@@ -425,6 +476,7 @@ class SettingsDialog:
         self.draft["keyboard_scale"] = round(self.keyboard_scale_var.get())
         self.draft["lock_key"] = self.lock_var.get()
         self.draft["view_mode"] = self.view_var.get()
+        self.draft["theme"] = self.theme_var.get()
         save_settings(self.draft)
         self.on_preview(dict(self.draft))
         self.window.destroy()
