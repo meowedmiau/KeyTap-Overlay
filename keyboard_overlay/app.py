@@ -174,6 +174,7 @@ class KeyboardOverlayApp:
         self.mouse_events = queue.SimpleQueue() 
         self.update_results = queue.SimpleQueue()
         self.update_checking = False
+        self.prev_hwnd = None
 
         self.background_photo = None
         self.video_reader = None
@@ -210,8 +211,17 @@ class KeyboardOverlayApp:
 
         self.build()
         self.place_bottom_left()
-        self.hwnd = ctypes.wintypes.HWND(self.root.winfo_id())
+        
+        hwnd = self.root.winfo_id()
+        parent = self.user32.GetParent(hwnd)
+        if parent:
+            hwnd = parent
+        self.hwnd = ctypes.wintypes.HWND(hwnd)
+        
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+
+        style = self.user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
+        self.user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE)
 
         try:
             self.hook = KeyboardHook(self.events)
@@ -388,6 +398,7 @@ class KeyboardOverlayApp:
 
         self.canvas.bind("<ButtonPress-1>", self.start_drag)
         self.canvas.bind("<B1-Motion>", self.drag)
+        self.canvas.bind("<ButtonRelease-1>", self.stop_drag)
         self.canvas.bind("<Button-3>", self.menu)
 
         self.root.attributes("-alpha", self.settings["opacity"] / 100)
@@ -614,10 +625,9 @@ class KeyboardOverlayApp:
         style = self.user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
         if self.locked: 
             style |= WS_EX_TRANSPARENT
-            style |= WS_EX_NOACTIVATE
         else: 
             style &= ~WS_EX_TRANSPARENT
-            style &= ~WS_EX_NOACTIVATE
+        style |= WS_EX_NOACTIVATE
         self.user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, style)
         self.user32.SetWindowPos(self.hwnd, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
 
@@ -628,6 +638,7 @@ class KeyboardOverlayApp:
 
     def start_drag(self, event):
         if self.locked: return
+        self.prev_hwnd = self.user32.GetForegroundWindow()
         if event.y <= self.header_height and event.x >= self.canvas.winfo_width() - self.scaled(28):
             self.open_options()
             return
@@ -637,6 +648,10 @@ class KeyboardOverlayApp:
     def drag(self, event):
         if not self.locked:
             self.root.geometry(f"+{event.x_root - self.drag_x}+{event.y_root - self.drag_y}")
+
+    def stop_drag(self, event):
+        if self.prev_hwnd:
+            self.user32.SetForegroundWindow(self.prev_hwnd)
 
     def menu(self, event):
         if not self.locked: self.show_options_menu(event.x_root, event.y_root)
